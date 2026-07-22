@@ -29,9 +29,16 @@ from app.core.security import (
 )
 from app.models.responses import InspectResponse
 from app.parsers import DEFAULT_VIDEO_PARSER_HOOKS, VideoParserHook
+from app.services.douyin_official import (
+    DouyinOfficialPlaybackUnavailable,
+    add_official_playback_format,
+    extract_official_douyin_info,
+    is_official_share_url,
+)
 from app.services.formats import normalize_formats
 from app.services.kuaishou import MediaFetchKuaishouIE
 from app.services.link_resolver import LinkResolver
+from app.services.official_platforms import prefer_official_original_formats
 from app.services.platform_credentials import (
     configure_ytdlp_credentials,
     is_managed_cookie_file,
@@ -242,7 +249,40 @@ def _extract_sync(url: str, parser_hook: VideoParserHook | None = None) -> dict[
         options = parser_hook.apply_request_profile(url, options)
     try:
         with SafeYoutubeDL(options) as ydl:
-            result = ydl.extract_info(url, download=False)
+            ytdlp_error: DownloadError | None = None
+            is_douyin = parser_hook is not None and parser_hook.name == "douyin-official-formats"
+            official_only = is_douyin and is_official_share_url(url)
+            if official_only:
+                result = extract_official_douyin_info(ydl, url)
+            else:
+                try:
+                    result = ydl.extract_info(url, download=False)
+                except DownloadError as exc:
+                    ytdlp_error = exc
+                    result = None
+            if result is None and is_douyin:
+                try:
+                    result = extract_official_douyin_info(ydl, url)
+                except DouyinOfficialPlaybackUnavailable as exc:
+                    if ytdlp_error is not None:
+                        raise ytdlp_error from exc
+                    raise
+            elif isinstance(result, dict) and is_douyin and not official_only:
+                try:
+                    add_official_playback_format(ydl, url, result)
+                except DouyinOfficialPlaybackUnavailable:
+                    logger.info(
+                        "Douyin official playback format was unavailable for %s",
+                        redact_url(url),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Douyin official playback lookup failed for %s error_type=%s",
+                        redact_url(url),
+                        type(exc).__name__,
+                    )
+            elif result is None and ytdlp_error is not None:
+                raise ytdlp_error
     except AppError:
         raise
     except DownloadError as exc:
@@ -263,6 +303,7 @@ def _extract_sync(url: str, parser_hook: VideoParserHook | None = None) -> dict[
         result = entries[0]
     if parser_hook is not None:
         parser_hook.validate_extracted_info(url, result)
+    prefer_official_original_formats(result)
     return result
 
 
@@ -304,6 +345,12 @@ async def inspect_media(url: str, redis_client: Redis) -> InspectResponse:
         raise error("VIDEO_TOO_LONG")
 
     formats, audio_formats = normalize_formats(info.get("formats") or [], duration)
+    direct_formats = info.get("_mediafetch_direct_formats")
+    if isinstance(direct_formats, dict):
+        for item in formats:
+            direct_source = direct_formats.get(item["id"])
+            if isinstance(direct_source, dict):
+                item["_direct_media"] = direct_source
     if not formats and not audio_formats:
         raise error("NO_FORMATS")
 

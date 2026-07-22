@@ -123,7 +123,7 @@ class MediaFetchKuaishouIE(InfoExtractor):
     IE_NAME = "mediafetch:kuaishou"
     _VALID_URL = (
         r"https?://(?:"
-        r"(?:v\.)?kuaishou\.com/(?:short-video/)?|"
+        r"(?:(?:v|www)\.)?kuaishou\.com/(?:short-video/)?|"
         r"v\.m\.chenzhongtech\.com/fw/photo/"
         r")(?P<id>[A-Za-z0-9_-]+)"
     )

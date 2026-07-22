@@ -108,6 +108,7 @@ def _download_track(
     progress_span: float,
     message: str,
     expected_size: int | None = None,
+    direct_media: dict[str, Any] | None = None,
 ) -> Path:
     context.check_limits()
     if is_bilibili_url(url):
@@ -145,8 +146,11 @@ def _download_track(
             context.check_limits()
             return downloaded
 
+    direct_url = direct_media.get("url") if isinstance(direct_media, dict) else None
+    is_direct = isinstance(direct_url, str)
+    download_url = direct_url if is_direct else url
     options: dict[str, Any] = {
-        "format": format_id,
+        "format": "best" if is_direct else format_id,
         "outtmpl": str(temp_dir / f"{prefix}.%(ext)s"),
         "noplaylist": True,
         "continuedl": True,
@@ -166,9 +170,17 @@ def _download_track(
     if context.settings.ytdlp_proxy:
         options["proxy"] = context.settings.ytdlp_proxy
     configure_ytdlp_credentials(options, url)
+    if is_direct and isinstance(direct_media, dict):
+        headers = direct_media.get("http_headers")
+        if isinstance(headers, dict):
+            options["http_headers"] = {
+                key: value
+                for key, value in headers.items()
+                if key in {"Referer", "User-Agent"} and isinstance(value, str)
+            }
     try:
         with SafeYoutubeDL(options) as ydl:
-            ydl.download([url])
+            ydl.download([download_url])
     except (JobCancelled, DownloadLimitExceeded, AppError):
         raise
     except DownloadError as exc:
@@ -519,6 +531,7 @@ def execute_download(redis_client: Redis, job_id: str, payload: dict[str, Any]) 
                 progress_span=video_span,
                 message="正在下载视频轨",
                 expected_size=selected.get("estimated_size"),
+                direct_media=selected.get("_direct_media"),
             )
             audio_path = None
             if audio:

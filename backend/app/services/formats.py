@@ -83,6 +83,7 @@ def normalize_format(item: dict[str, Any], duration: int | None) -> dict[str, An
         "has_audio": has_audio,
         "requires_merge": has_video and not has_audio,
         "preferred": False,
+        "_source_preference": _number(item.get("source_preference"), float) or 0,
     }
 
 
@@ -104,6 +105,7 @@ def _video_sort_key(item: dict[str, Any]) -> tuple:
         -int(item["has_video"] and item["has_audio"]),
         -int(item["extension"] in {"mp4", "m4v"}),
         -int(_is_h264(item.get("video_codec"))),
+        -(item.get("_source_preference") or 0),
         -(item.get("fps") or 0),
         -(item.get("bitrate") or 0),
         -int(item.get("estimated_size") is not None),

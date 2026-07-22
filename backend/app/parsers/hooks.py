@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from app.core.errors import error
 from app.core.security import canonicalize_url
+from app.services.douyin_official import DOUYIN_MOBILE_USER_AGENT
 
 
 def _host_matches(hostname: str, domains: Sequence[str]) -> bool:
@@ -91,7 +92,10 @@ class VideoParserHook(ABC):
 class DouyinOfficialFormatHook(VideoParserHook):
     name = "douyin-official-formats"
     allowed_source_domains = ("douyin.com", "iesdouyin.com")
-    request_profile = ParserRequestProfile(referer="https://www.douyin.com/")
+    request_profile = ParserRequestProfile(
+        referer="https://www.douyin.com/",
+        user_agent=DOUYIN_MOBILE_USER_AGENT,
+    )
 
     def validate_platform_result(self, info: Mapping[str, Any]) -> None:
         extractor = str(info.get("extractor_key") or info.get("extractor") or "").lower()
