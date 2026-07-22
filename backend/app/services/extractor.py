@@ -261,9 +261,26 @@ def _extract_sync(url: str, parser_hook: VideoParserHook | None = None) -> dict[
         if len(entries) != 1:
             raise error("UNSUPPORTED_URL", message="暂不支持播放列表或多视频页面")
         result = entries[0]
-    if parser_hook is not None:
+        if parser_hook is not None:
         parser_hook.validate_extracted_info(url, result)
+
+    # 👇 --- 新增：暴力替换无水印接口 --- 👇
+    def _strip_watermark(url_str: Any) -> Any:
+        if isinstance(url_str, str) and "/playwm/" in url_str:
+            return url_str.replace("/playwm/", "/play/")
+        return url_str
+
+    if result.get("url"):
+        result["url"] = _strip_watermark(result["url"])
+    
+    if isinstance(result.get("formats"), list):
+        for fmt in result["formats"]:
+            if isinstance(fmt, dict) and fmt.get("url"):
+                fmt["url"] = _strip_watermark(fmt["url"])
+    # 👆 -------------------------------- 👆
+
     return result
+
 
 
 def _cache_key_for_url(url: str) -> str:
