@@ -11,7 +11,7 @@
     "test": "vitest"
   },
   "dependencies": {
-    "next": "15.4.4",
+    "next": "15.5.21",
     "react": "19.1.0",
     "react-dom": "19.1.0"
   },
@@ -25,12 +25,16 @@
     "@vitejs/plugin-react": "4.7.0",
     "autoprefixer": "10.4.21",
     "eslint": "8.57.1",
-    "eslint-config-next": "15.4.4",
+    "eslint-config-next": "15.5.21",
     "jsdom": "26.1.0",
-    "postcss": "8.5.6",
+    "postcss": "8.5.10",
     "tailwindcss": "3.4.17",
     "typescript": "5.8.3",
     "vite": "6.1.0",
     "vitest": "3.2.4"
+  },
+  "overrides": {
+    "postcss": "8.5.10",
+    "sharp": "0.35.0"
   }
 }
