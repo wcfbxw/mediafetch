@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest==8.4.1
+pytest-asyncio==1.1.0
+pytest-cov==6.2.1
+fakeredis==2.30.3
+ruff==0.12.7
+mypy==1.17.1

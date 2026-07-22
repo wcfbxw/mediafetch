@@ -1,0 +1,130 @@
+name: mediafetch
+
+x-backend-common: &backend-common
+  build:
+    context: ./backend
+  env_file:
+    - .env
+  environment:
+    REDIS_URL: redis://redis:6379/0
+    STORAGE_ROOT: /data
+    CREDENTIALS_ROOT: /credentials
+  volumes:
+    - media_data:/data
+    - media_credentials:/credentials
+  depends_on:
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  redis:
+    image: redis:7.4.2-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    <<: *backend-common
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=172.16.0.0/12", "--no-access-log"]
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  worker:
+    <<: *backend-common
+    command: ["python", "-m", "app.workers.worker"]
+    stop_grace_period: 45s
+    cpus: "${WORKER_CPU_LIMIT:-4.0}"
+
+  cleanup:
+    <<: *backend-common
+    command: ["python", "-m", "app.services.cleanup"]
+    stop_grace_period: 20s
+
+  backend-test:
+    build:
+      context: ./backend
+      target: test
+    profiles: ["test"]
+    environment:
+      APP_ENV: test
+      TOKEN_SECRET: test-secret-that-is-definitely-at-least-32-chars
+      STORAGE_ROOT: /tmp/mediafetch-tests
+      CREDENTIALS_ROOT: /tmp/mediafetch-test-credentials
+    command: ["python", "-m", "pytest"]
+
+  frontend-test:
+    build:
+      context: ./frontend
+      target: test
+    profiles: ["test"]
+    command: ["npm", "test", "--", "--run"]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-/api/v1}
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-/api/v1}
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27.4-alpine
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - media_data:/data:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/nginx-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  media_data:
+  media_credentials:
+  redis_data:
