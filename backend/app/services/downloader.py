@@ -17,7 +17,6 @@ from app.core.errors import AppError, error
 from app.core.logging import redact_url
 from app.services.extractor import QuietLogger, SafeYoutubeDL, map_ytdlp_error
 from app.services.file_tokens import create_file_token, sanitize_filename
-from app.services.formats import is_mp4_compatible, select_output_container
 from app.services.jobs import (
     JobCancelled,
     cancellation_requested,
@@ -30,6 +29,11 @@ from app.services.parallel_downloader import (
     parallel_download_track,
 )
 from app.services.platform_credentials import configure_ytdlp_credentials, is_bilibili_url
+from app.services.postprocess import (
+    VideoPostprocessPlan,
+    build_video_postprocess_plan,
+    postprocess_preset_from_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -383,7 +387,7 @@ def _create_video_output(
     video_path: Path,
     audio_path: Path | None,
     output_path: Path,
-    compatibility_mode: bool,
+    plan: VideoPostprocessPlan,
 ) -> None:
     inputs = ["-i", str(video_path)]
     if audio_path:
@@ -394,7 +398,7 @@ def _create_video_output(
     else:
         maps.extend(["-map", "0:a?"])
 
-    if compatibility_mode:
+    if plan.transcode:
         update_job(
             context.redis,
             context.job_id,
@@ -441,7 +445,7 @@ def _create_video_output(
         output=output_path,
         failure_code=failure_code,
         progress_duration=(
-            int(context.payload.get("duration") or 0) if compatibility_mode else None
+            int(context.payload.get("duration") or 0) if plan.transcode else None
         ),
         progress_message="正在转换为兼容格式",
     )
@@ -531,15 +535,13 @@ def execute_download(redis_client: Redis, job_id: str, payload: dict[str, Any]) 
                     expected_size=audio.get("estimated_size"),
                 )
             audio_codec = (audio or selected).get("audio_codec")
-            needs_compatibility_transcode = bool(payload["compatibility_mode"]) and not (
-                is_mp4_compatible(selected.get("video_codec"), audio_codec)
-            )
-            container = select_output_container(
-                payload["output_container"],
+            plan = build_video_postprocess_plan(
+                preset=postprocess_preset_from_payload(payload),
+                requested_container=payload["output_container"],
                 video_codec=selected.get("video_codec"),
                 audio_codec=audio_codec,
-                compatibility_mode=payload["compatibility_mode"],
             )
+            container = plan.output_container
             filename = sanitize_filename(f"{payload['title']}.{container}")
             output_path = final_dir / filename
             _create_video_output(
@@ -547,7 +549,7 @@ def execute_download(redis_client: Redis, job_id: str, payload: dict[str, Any]) 
                 video_path=video_path,
                 audio_path=audio_path,
                 output_path=output_path,
-                compatibility_mode=needs_compatibility_transcode,
+                plan=plan,
             )
         else:
             source_path = _download_track(

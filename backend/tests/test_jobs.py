@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from app.api.downloads import _create_download
 from app.core.errors import AppError
@@ -20,6 +21,16 @@ def test_task_state_transitions():
     assert can_transition("merging", "ready")
     assert not can_transition("ready", "downloading")
     assert can_transition("ready", "expired")
+
+
+def test_download_request_rejects_unsafe_postprocess_preset():
+    with pytest.raises(ValidationError):
+        DownloadRequest(
+            inspect_id="abcdefghijklmnopqrstuvwxyz",
+            video_format_id="v1",
+            output_container="mp4",
+            postprocess_preset="delogo",  # type: ignore[arg-type]
+        )
 
 
 def test_task_cancellation(redis_client):

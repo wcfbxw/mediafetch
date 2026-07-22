@@ -29,6 +29,7 @@ class InspectResponse(BaseModel):
     duration: int | None = None
     uploader: str | None = None
     platform: str
+    parser_hook: str | None = None
     formats: list[MediaFormat]
     audio_formats: list[MediaFormat]
 
@@ -41,6 +42,7 @@ class ParseResponse(BaseModel):
     duration: int | None = None
     uploader: str | None = None
     platform: str
+    parser_hook: str | None = None
     formats: list[MediaFormat]
     audio_formats: list[MediaFormat]
 

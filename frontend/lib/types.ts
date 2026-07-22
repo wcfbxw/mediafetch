@@ -22,6 +22,7 @@ export type Inspection = {
   duration: number | null;
   uploader: string | null;
   platform: string;
+  parser_hook: string | null;
   formats: MediaFormat[];
   audio_formats: MediaFormat[];
 };

@@ -27,6 +27,7 @@ from app.services.jobs import (
     reserve_client_slot,
     save_new_job,
 )
+from app.services.postprocess import PostprocessPreset, resolve_postprocess_preset
 from app.workers.tasks import run_download_job
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,10 @@ def _create_download(
         raise error("QUEUE_FULL")
 
     job_id = secrets.token_urlsafe(24)
+    postprocess_preset = resolve_postprocess_preset(
+        payload.postprocess_preset,
+        legacy_compatibility_mode=payload.compatibility_mode,
+    )
     reserve_client_slot(redis_client, client_ip, job_id)
     state = default_job_state(job_id)
     task_payload = {
@@ -83,7 +88,9 @@ def _create_download(
         "video_format": selected,
         "audio_format": audio,
         "output_container": payload.output_container,
-        "compatibility_mode": payload.compatibility_mode,
+        "postprocess_preset": postprocess_preset.value,
+        # Retained for workers that were already running during a rolling upgrade.
+        "compatibility_mode": postprocess_preset is PostprocessPreset.TRANSCODE,
         "duration": duration,
         "client_ip": client_ip,
     }

@@ -174,6 +174,7 @@ export default function Home() {
         video_format_id: selected.id,
         audio_format_id: audioId,
         output_container: container,
+        postprocess_preset: compatibility ? "transcode" : "remux",
         compatibility_mode: compatibility,
       });
       const queuedJob: Job = {
