@@ -28,7 +28,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="MediaFetch API",
-    version="1.1.0",
+    version="1.2.0",
     docs_url="/api/docs" if settings.app_env != "production" else None,
     redoc_url=None,
     default_response_class=ORJSONResponse,

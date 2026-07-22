@@ -41,6 +41,7 @@ export function createDownload(payload: {
   video_format_id: string;
   audio_format_id: string | null;
   output_container: string;
+  postprocess_preset: "remux" | "transcode";
   compatibility_mode: boolean;
 }): Promise<{ job_id: string; status: "queued" }> {
   return request("/downloads", {

@@ -28,6 +28,7 @@ from app.core.security import (
     validate_resolved_addresses,
 )
 from app.models.responses import InspectResponse
+from app.parsers import DEFAULT_VIDEO_PARSER_HOOKS, VideoParserHook
 from app.services.formats import normalize_formats
 from app.services.kuaishou import MediaFetchKuaishouIE
 from app.services.link_resolver import LinkResolver
@@ -221,7 +222,7 @@ def _safe_thumbnail(info: dict[str, Any]) -> str | None:
         return None
 
 
-def _extract_sync(url: str) -> dict[str, Any]:
+def _extract_sync(url: str, parser_hook: VideoParserHook | None = None) -> dict[str, Any]:
     settings = get_settings()
     options: dict[str, Any] = {
         "skip_download": True,
@@ -237,6 +238,8 @@ def _extract_sync(url: str) -> dict[str, Any]:
     if settings.ytdlp_proxy:
         options["proxy"] = settings.ytdlp_proxy
     configure_ytdlp_credentials(options, url)
+    if parser_hook is not None:
+        options = parser_hook.apply_request_profile(url, options)
     try:
         with SafeYoutubeDL(options) as ydl:
             result = ydl.extract_info(url, download=False)
@@ -258,6 +261,8 @@ def _extract_sync(url: str) -> dict[str, Any]:
         if len(entries) != 1:
             raise error("UNSUPPORTED_URL", message="暂不支持播放列表或多视频页面")
         result = entries[0]
+    if parser_hook is not None:
+        parser_hook.validate_extracted_info(url, result)
     return result
 
 
@@ -272,6 +277,7 @@ def _public_payload(data: dict[str, Any]) -> dict[str, Any]:
 async def inspect_media(url: str, redis_client: Redis) -> InspectResponse:
     settings = get_settings()
     checked_url = await LinkResolver(max_redirects=settings.max_redirects).resolve(url)
+    parser_hook = DEFAULT_VIDEO_PARSER_HOOKS.select(checked_url)
     url_hash = _cache_key_for_url(checked_url)
     cached_id = cast(str | None, redis_client.get(f"inspect-url:{url_hash}"))
     if cached_id:
@@ -281,7 +287,7 @@ async def inspect_media(url: str, redis_client: Redis) -> InspectResponse:
 
     try:
         info = await asyncio.wait_for(
-            asyncio.to_thread(_extract_sync, checked_url),
+            asyncio.to_thread(_extract_sync, checked_url, parser_hook),
             timeout=settings.inspect_timeout_seconds,
         )
     except TimeoutError as exc:
@@ -312,6 +318,7 @@ async def inspect_media(url: str, redis_client: Redis) -> InspectResponse:
         "duration": duration,
         "uploader": uploader,
         "platform": platform,
+        "parser_hook": parser_hook.name if parser_hook else None,
         "formats": formats,
         "audio_formats": audio_formats,
         "_source_url": checked_url,

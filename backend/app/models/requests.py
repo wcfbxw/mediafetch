@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.errors import AppError
 from app.services.link_resolver import extract_http_url
+from app.services.postprocess import PostprocessPreset
 
 
 class InspectRequest(BaseModel):
@@ -29,6 +30,7 @@ class DownloadRequest(BaseModel):
     video_format_id: str = Field(min_length=1, max_length=256)
     audio_format_id: str | None = Field(default=None, max_length=256)
     output_container: Literal["mp4", "webm", "mkv", "original", "m4a", "mp3"] = "mp4"
+    postprocess_preset: PostprocessPreset = PostprocessPreset.REMUX
     compatibility_mode: bool = False
 
     @field_validator("video_format_id", "audio_format_id")
@@ -57,5 +59,6 @@ class ParseRequest(BaseModel):
 
 class QuickDownloadRequest(ParseRequest):
     output_container: Literal["mp4", "webm", "mkv"] = "mp4"
+    postprocess_preset: PostprocessPreset = PostprocessPreset.REMUX
     compatibility_mode: bool = False
     apply_ffmpeg_crop: bool = False

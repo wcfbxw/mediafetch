@@ -26,6 +26,7 @@ def _public_parse_response(inspection) -> ParseResponse:
         duration=inspection.duration,
         uploader=inspection.uploader,
         platform=inspection.platform,
+        parser_hook=inspection.parser_hook,
         formats=inspection.formats,
         audio_formats=inspection.audio_formats,
     )
@@ -86,6 +87,7 @@ async def quick_download(
             video_format_id=selected.id,
             audio_format_id=None,
             output_container=payload.output_container,
+            postprocess_preset=payload.postprocess_preset,
             compatibility_mode=payload.compatibility_mode,
         ),
         client_ip,
