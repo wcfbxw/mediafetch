@@ -33,6 +33,18 @@ class InspectResponse(BaseModel):
     audio_formats: list[MediaFormat]
 
 
+class ParseResponse(BaseModel):
+    code: Literal[200] = 200
+    inspect_id: str
+    title: str
+    cover_url: str | None = None
+    duration: int | None = None
+    uploader: str | None = None
+    platform: str
+    formats: list[MediaFormat]
+    audio_formats: list[MediaFormat]
+
+
 JobStatus = Literal[
     "queued",
     "inspecting",
@@ -49,6 +61,13 @@ JobStatus = Literal[
 
 
 class CreateDownloadResponse(BaseModel):
+    job_id: str
+    status: Literal["queued"]
+
+
+class QuickDownloadResponse(BaseModel):
+    code: Literal[202] = 202
+    message: Literal["queued"] = "queued"
     job_id: str
     status: Literal["queued"]
 

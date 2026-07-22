@@ -25,12 +25,12 @@ from app.core.logging import redact_url
 from app.core.security import (
     _resolved_addresses,
     validate_public_url_sync,
-    validate_redirect_chain,
     validate_resolved_addresses,
 )
 from app.models.responses import InspectResponse
 from app.services.formats import normalize_formats
 from app.services.kuaishou import MediaFetchKuaishouIE
+from app.services.link_resolver import LinkResolver
 from app.services.platform_credentials import (
     configure_ytdlp_credentials,
     is_managed_cookie_file,
@@ -271,7 +271,7 @@ def _public_payload(data: dict[str, Any]) -> dict[str, Any]:
 
 async def inspect_media(url: str, redis_client: Redis) -> InspectResponse:
     settings = get_settings()
-    checked_url = await validate_redirect_chain(url)
+    checked_url = await LinkResolver(max_redirects=settings.max_redirects).resolve(url)
     url_hash = _cache_key_for_url(checked_url)
     cached_id = cast(str | None, redis_client.get(f"inspect-url:{url_hash}"))
     if cached_id:

@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 
-from app.api import admin, downloads, health, inspect, jobs, platform_sessions
+from app.api import admin, convenience, downloads, health, inspect, jobs, platform_sessions
 from app.core.config import get_settings
 from app.core.errors import AppError, error
 from app.core.logging import RequestIdAdapter, configure_logging, redact_path
@@ -28,7 +28,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="MediaFetch API",
-    version="1.0.0",
+    version="1.1.0",
     docs_url="/api/docs" if settings.app_env != "production" else None,
     redoc_url=None,
     default_response_class=ORJSONResponse,
@@ -118,6 +118,7 @@ async def validation_error_handler(
 for router in (
     health.router,
     inspect.router,
+    convenience.router,
     downloads.router,
     jobs.router,
     admin.router,

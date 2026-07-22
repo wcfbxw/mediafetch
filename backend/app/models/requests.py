@@ -1,7 +1,9 @@
-import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.errors import AppError
+from app.services.link_resolver import extract_http_url
 
 
 class InspectRequest(BaseModel):
@@ -12,16 +14,12 @@ class InspectRequest(BaseModel):
     @field_validator("url", mode="before")
     @classmethod
     def extract_url_from_share_text(cls, value: object) -> str:
-        if not isinstance(value, str) or len(value) > 8192:
+        if not isinstance(value, str):
             raise ValueError("invalid URL input")
-        match = re.search(r"https?://[^\s<>\"']+", value, flags=re.IGNORECASE)
-        if not match:
-            raise ValueError("no HTTP URL found")
-        candidate = match.group(0)
-        trailing = frozenset(".,;:!?])}>,，。；：！？）】》」』")
-        while candidate and candidate[-1] in trailing:
-            candidate = candidate[:-1]
-        return candidate
+        try:
+            return extract_http_url(value)
+        except AppError as exc:
+            raise ValueError("invalid URL input") from exc
 
 
 class DownloadRequest(BaseModel):
@@ -39,3 +37,25 @@ class DownloadRequest(BaseModel):
         if value is not None and any(ord(char) < 32 for char in value):
             raise ValueError("format id contains control characters")
         return value
+
+
+class ParseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    share_text: str = Field(min_length=8, max_length=8192)
+
+    @field_validator("share_text", mode="before")
+    @classmethod
+    def extract_url_from_share_text(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("invalid share text")
+        try:
+            return extract_http_url(value)
+        except AppError as exc:
+            raise ValueError("invalid share text") from exc
+
+
+class QuickDownloadRequest(ParseRequest):
+    output_container: Literal["mp4", "webm", "mkv"] = "mp4"
+    compatibility_mode: bool = False
+    apply_ffmpeg_crop: bool = False

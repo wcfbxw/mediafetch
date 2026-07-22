@@ -31,6 +31,10 @@ ERROR_MESSAGES: dict[str, tuple[str, int]] = {
     "DOWNLOAD_FAILED": ("下载失败，请稍后重试", 500),
     "MERGE_FAILED": ("音视频合并失败", 500),
     "TRANSCODE_FAILED": ("格式转换失败", 500),
+    "WATERMARK_REMOVAL_NOT_SUPPORTED": (
+        "不提供删除、裁切或遮挡平台水印的功能",
+        422,
+    ),
     "JOB_NOT_FOUND": ("任务不存在", 404),
     "JOB_EXPIRED": ("任务已过期", 410),
     "ADMIN_UNAUTHORIZED": ("管理员凭证无效", 401),

@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.models.requests import InspectRequest
+from app.models.requests import InspectRequest, ParseRequest
 
 
 def test_inspect_request_accepts_plain_url():
@@ -13,6 +13,11 @@ def test_inspect_request_extracts_url_from_platform_share_text():
         url="【第1集：外卖小哥穿越修仙世界，变成了一头猪-哔哩哔哩】 https://b23.tv/V6TfblR"
     )
     assert request.url == "https://b23.tv/V6TfblR"
+
+
+def test_parse_request_uses_the_same_share_text_extractor():
+    request = ParseRequest(share_text="复制打开：https://example.com/watch?id=1，查看视频")
+    assert request.share_text == "https://example.com/watch?id=1"
 
 
 def test_inspect_request_removes_trailing_chinese_punctuation():
