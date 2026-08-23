@@ -92,8 +92,9 @@ export function PlatformCookiePanel() {
   if (!token) return null;
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-soft sm:p-7 dark:border-slate-800 dark:bg-slate-900">
-      <h2 className="text-xl font-black">其他平台会话</h2>
+    <section className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-panel sm:p-7 dark:border-slate-800 dark:bg-slate-900">
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-cobalt-600 dark:text-indigo-300">Cookie sessions</p>
+      <h2 className="mt-2 text-xl font-black">其他平台会话</h2>
       <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
         这些平台没有可安全接入的扫码接口。请从已登录浏览器导出当前平台的 Netscape cookies.txt；文件只允许包含对应平台域名，最大 128 KB。
       </p>
@@ -102,7 +103,7 @@ export function PlatformCookiePanel() {
         {PLATFORMS.map((platform) => {
           const status = statuses[platform.id];
           return (
-            <article key={platform.id} className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+            <article key={platform.id} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-700 dark:bg-slate-950/40">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="flex items-center gap-2">
@@ -116,7 +117,7 @@ export function PlatformCookiePanel() {
                   </p>
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  <label className="flex min-h-11 cursor-pointer items-center justify-center rounded-xl bg-cobalt-600 px-4 text-sm font-bold text-white">
+                  <label className="flex min-h-11 cursor-pointer items-center justify-center rounded-xl bg-slate-950 px-4 text-sm font-black text-white hover:bg-cobalt-600 dark:bg-signal dark:text-slate-950">
                     {busy === platform.id ? "处理中…" : status?.configured ? "更新 Cookie" : "导入 Cookie"}
                     <input
                       type="file"

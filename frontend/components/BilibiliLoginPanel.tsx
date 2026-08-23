@@ -114,8 +114,9 @@ export function BilibiliLoginPanel() {
 
   if (!authorizedToken) {
     return (
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-soft sm:p-7 dark:border-slate-800 dark:bg-slate-900">
-        <h1 className="text-2xl font-black">平台登录管理</h1>
+      <section className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-panel sm:p-7 dark:border-slate-800 dark:bg-slate-900">
+        <p className="text-xs font-black uppercase tracking-[0.18em] text-cobalt-600 dark:text-indigo-300">Secure access</p>
+        <h2 className="mt-2 text-2xl font-black">验证管理员身份</h2>
         <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
           管理令牌只保存在当前浏览器标签的会话存储中，不会写入 URL。
         </p>
@@ -132,13 +133,13 @@ export function BilibiliLoginPanel() {
             onKeyDown={(event) => {
               if (event.key === "Enter") void authorize();
             }}
-            className="min-h-12 min-w-0 flex-1 rounded-xl border border-slate-300 bg-transparent px-4 dark:border-slate-700"
+            className="min-h-12 min-w-0 flex-1 rounded-xl border border-slate-300 bg-slate-50 px-4 focus:border-cobalt-500 dark:border-slate-700 dark:bg-slate-950"
           />
           <button
             type="button"
             disabled={busy}
             onClick={authorize}
-            className="min-h-12 rounded-xl bg-cobalt-600 px-6 font-bold text-white disabled:opacity-50"
+            className="min-h-12 rounded-xl bg-slate-950 px-6 font-black text-white hover:bg-cobalt-600 disabled:opacity-50 dark:bg-signal dark:text-slate-950"
           >
             验证并进入
           </button>
@@ -149,11 +150,11 @@ export function BilibiliLoginPanel() {
   }
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-soft sm:p-7 dark:border-slate-800 dark:bg-slate-900">
+    <section className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-panel sm:p-7 dark:border-slate-800 dark:bg-slate-900">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-cobalt-600 dark:text-blue-300">Bilibili</p>
-          <h1 className="mt-2 text-2xl font-black">服务器平台会话</h1>
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-cobalt-600 dark:text-indigo-300">Bilibili · QR login</p>
+          <h2 className="mt-2 text-2xl font-black">哔哩哔哩会话</h2>
         </div>
         <span className={`rounded-full px-3 py-1.5 text-xs font-bold ${session?.configured ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}>
           {session?.configured ? "已登录" : "未登录"}
@@ -177,7 +178,7 @@ export function BilibiliLoginPanel() {
         </div>
       ) : (
         <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-          <button type="button" disabled={busy} onClick={startLogin} className="min-h-12 rounded-xl bg-cobalt-600 px-6 font-bold text-white disabled:opacity-50">
+          <button type="button" disabled={busy} onClick={startLogin} className="min-h-12 rounded-xl bg-slate-950 px-6 font-black text-white hover:bg-cobalt-600 disabled:opacity-50 dark:bg-signal dark:text-slate-950">
             {session?.configured ? "重新扫码登录" : "生成登录二维码"}
           </button>
           {session?.configured ? (

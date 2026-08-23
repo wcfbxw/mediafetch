@@ -44,15 +44,19 @@ export function UrlInput({ busy = false, onSubmit }: Props) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3" aria-label="视频链接解析">
-      <label
-        htmlFor="video-url"
-        className="block text-sm font-semibold text-slate-700 dark:text-slate-200"
-      >
-        视频链接或分享文案
-      </label>
-      <div className="flex flex-col gap-3 sm:flex-row">
+    <form onSubmit={submit} className="space-y-3" aria-label="视频链接解析" aria-busy={busy}>
+      <div className="flex items-end justify-between gap-4">
+        <label
+          htmlFor="video-url"
+          className="block text-sm font-bold text-slate-800 dark:text-slate-100"
+        >
+          视频链接或分享文案
+        </label>
+        <span className="hidden text-xs text-slate-400 sm:block">支持直接粘贴整段平台分享文案</span>
+      </div>
+      <div className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-2 shadow-inner shadow-slate-200/50 focus-within:border-cobalt-500 focus-within:bg-white focus-within:ring-4 focus-within:ring-cobalt-500/10 sm:flex sm:items-center sm:gap-2 dark:border-slate-700 dark:bg-slate-950/60 dark:shadow-none dark:focus-within:bg-slate-950">
         <div className="relative min-w-0 flex-1">
+          <span aria-hidden="true" className="absolute left-4 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-mint shadow-[0_0_0_5px_rgba(24,185,129,.12)]" />
           <input
             id="video-url"
             type="text"
@@ -69,13 +73,14 @@ export function UrlInput({ busy = false, onSubmit }: Props) {
               setIsError(false);
             }}
             placeholder="粘贴链接或整段分享文案"
-            className="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-4 pr-20 text-base text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-cobalt-500 disabled:opacity-60 dark:border-slate-650 dark:bg-slate-900 dark:text-white"
+            aria-describedby={inputMessage ? "url-input-message" : undefined}
+            className="min-h-14 w-full rounded-2xl border-0 bg-transparent py-3 pl-10 pr-20 text-base font-medium text-slate-950 outline-none placeholder:font-normal placeholder:text-slate-400 focus:ring-0 disabled:opacity-60 dark:text-white"
           />
           <button
             type="button"
             onClick={paste}
             disabled={busy}
-            className="absolute right-1.5 top-1.5 min-h-9 rounded-lg px-3 text-sm font-semibold text-cobalt-600 hover:bg-cobalt-50 disabled:opacity-50 dark:text-blue-300 dark:hover:bg-slate-800"
+            className="absolute right-1.5 top-1/2 min-h-10 -translate-y-1/2 rounded-xl px-3 text-sm font-bold text-cobalt-600 hover:bg-cobalt-50 disabled:opacity-50 dark:text-indigo-300 dark:hover:bg-slate-800"
           >
             粘贴
           </button>
@@ -83,13 +88,15 @@ export function UrlInput({ busy = false, onSubmit }: Props) {
         <button
           type="submit"
           disabled={busy || !value.trim()}
-          className="min-h-12 shrink-0 rounded-xl bg-cobalt-600 px-6 font-semibold text-white shadow-sm transition hover:bg-cobalt-700 disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label={busy ? "正在解析" : "解析视频"}
+          className="mt-2 min-h-14 w-full shrink-0 rounded-2xl bg-slate-950 px-7 font-bold text-white shadow-lg shadow-slate-950/15 hover:bg-cobalt-600 disabled:cursor-not-allowed disabled:opacity-50 sm:mt-0 sm:w-auto dark:bg-signal dark:text-slate-950 dark:hover:bg-lime-300"
         >
-          {busy ? "正在解析…" : "解析视频"}
+          {busy ? "正在解析…" : "解析视频 →"}
         </button>
       </div>
       {inputMessage ? (
         <p
+          id="url-input-message"
           className={`text-sm ${
             isError
               ? "text-amber-700 dark:text-amber-300"

@@ -20,6 +20,8 @@ test("renders live progress details", () => {
   expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "46");
   expect(screen.getByText("10 MB/s")).toBeInTheDocument();
   expect(screen.getByText("约 6 秒")).toBeInTheDocument();
+  expect(screen.getByRole("list", { name: "任务阶段" })).toBeInTheDocument();
+  expect(screen.getByText(/刷新或关闭页面不会中断/)).toBeInTheDocument();
 });
 
 test("renders a prominent download action when ready", () => {

@@ -21,7 +21,7 @@ test("keeps the admin token out of the URL and shows session state", async () =>
   render(<BilibiliLoginPanel />);
   await user.type(screen.getByLabelText("管理员令牌"), "a".repeat(64));
   await user.click(screen.getByRole("button", { name: "验证并进入" }));
-  expect(await screen.findByText("服务器平台会话")).toBeInTheDocument();
+  expect(await screen.findByText("哔哩哔哩会话")).toBeInTheDocument();
   expect(window.location.search).toBe("");
   expect(getBilibiliSession).toHaveBeenCalledWith("a".repeat(64));
 });
