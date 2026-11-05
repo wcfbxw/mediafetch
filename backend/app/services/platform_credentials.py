@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from app.core.config import get_settings
 from app.core.errors import error
+from app.services.douyin_official import DOUYIN_DESKTOP_USER_AGENT
 from app.services.kuaishou import KUAISHOU_MOBILE_USER_AGENT
 
 PlatformCookieName = Literal["douyin", "xiaohongshu", "instagram", "youtube"]
@@ -27,11 +28,7 @@ IMPORTABLE_COOKIE_PLATFORMS = frozenset({"douyin", "xiaohongshu", "instagram", "
 COOKIE_PLATFORMS = IMPORTABLE_COOKIE_PLATFORMS | {"bilibili"}
 MAX_COOKIE_FILE_BYTES = 128 * 1024
 
-DESKTOP_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/143.0.0.0 Safari/537.36"
-)
+DESKTOP_USER_AGENT = DOUYIN_DESKTOP_USER_AGENT
 
 
 def _host_matches(hostname: str, domains: tuple[str, ...]) -> bool:

@@ -6,6 +6,7 @@ import http.client
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -48,6 +49,8 @@ from app.services.platform_credentials import (
 )
 
 logger = logging.getLogger(__name__)
+
+_DOUYIN_VIDEO_ID = re.compile(r"/(?:video|share/video)/(\d+)(?:[/?#]|$)", re.IGNORECASE)
 
 
 class QuietLogger:
@@ -249,6 +252,31 @@ def map_ytdlp_error(exc: Exception) -> AppError:
     return error("UNSUPPORTED_URL")
 
 
+def _douyin_web_url(source_url: str) -> str | None:
+    match = _DOUYIN_VIDEO_ID.search(urlsplit(source_url).path)
+    if match is None:
+        return None
+    return f"https://www.douyin.com/video/{match.group(1)}"
+
+
+def _douyin_extraction_error(
+    ytdlp_error: DownloadError,
+    official_error: DouyinOfficialPlaybackUnavailable,
+) -> AppError:
+    message = f"{ytdlp_error} {official_error}".lower()
+    if "uifid" in message or "missing douyin visitor cookie" in message:
+        return error(
+            "LOGIN_REQUIRED",
+            message="抖音 Cookie 缺少访客标识，请在 /admin 重新导入完整浏览器 Cookie",
+        )
+    if any(marker in message for marker in ("fresh cookies", "403", "validate error")):
+        return error(
+            "LOGIN_REQUIRED",
+            message="抖音解析被风控拦截，请在 /admin 重新导入包含 UIFID_TEMP 的抖音 Cookie",
+        )
+    return error("VIDEO_UNAVAILABLE", message="抖音暂时没有返回可播放地址，请稍后重试")
+
+
 def _safe_thumbnail(info: dict[str, Any]) -> str | None:
     thumbnail = info.get("thumbnail")
     if not isinstance(thumbnail, str):
@@ -280,24 +308,44 @@ def _extract_sync(url: str, parser_hook: VideoParserHook | None = None) -> dict[
     try:
         with SafeYoutubeDL(options) as ydl:
             ytdlp_error: DownloadError | None = None
+            official_error: DouyinOfficialPlaybackUnavailable | None = None
             is_douyin = parser_hook is not None and parser_hook.name == "douyin-official-formats"
             official_only = is_douyin and is_official_share_url(url)
+            result: dict[str, Any] | None = None
+
             if official_only:
-                result = extract_official_douyin_info(ydl, url)
-            else:
-                try:
-                    result = ydl.extract_info(url, download=False)
-                except DownloadError as exc:
-                    ytdlp_error = exc
-                    result = None
-            if result is None and is_douyin:
                 try:
                     result = extract_official_douyin_info(ydl, url)
                 except DouyinOfficialPlaybackUnavailable as exc:
+                    official_error = exc
+
+            if result is None:
+                extract_url = _douyin_web_url(url) if official_only else None
+                try:
+                    result = ydl.extract_info(extract_url or url, download=False)
+                except DownloadError as exc:
+                    ytdlp_error = exc
+                    result = None
+
+            if result is None and is_douyin:
+                if official_error is None:
+                    try:
+                        result = extract_official_douyin_info(ydl, url)
+                    except DouyinOfficialPlaybackUnavailable as exc:
+                        official_error = exc
+                if result is None:
+                    if ytdlp_error is not None and official_error is not None:
+                        raise _douyin_extraction_error(ytdlp_error, official_error) from ytdlp_error
                     if ytdlp_error is not None:
-                        raise ytdlp_error from exc
-                    raise
-            elif isinstance(result, dict) and is_douyin and not official_only:
+                        raise ytdlp_error
+                    if official_error is not None:
+                        raise official_error
+            elif (
+                isinstance(result, dict)
+                and is_douyin
+                and not official_only
+                and ytdlp_error is None
+            ):
                 try:
                     add_official_playback_format(ydl, url, result)
                 except DouyinOfficialPlaybackUnavailable:
@@ -311,8 +359,6 @@ def _extract_sync(url: str, parser_hook: VideoParserHook | None = None) -> dict[
                         redact_url(url),
                         type(exc).__name__,
                     )
-            elif result is None and ytdlp_error is not None:
-                raise ytdlp_error
     except AppError:
         raise
     except DownloadError as exc:

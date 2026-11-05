@@ -4,12 +4,22 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
+from yt_dlp.networking.common import Request
+
+from app.services.douyin_web_signature import pick_uifid, sign_detail_query
+
 OFFICIAL_DOUYIN_FORMAT_ID = "mediafetch-douyin-official-1080p"
+DOUYIN_DESKTOP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/143.0.0.0 Safari/537.36"
+)
 DOUYIN_MOBILE_USER_AGENT = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
     "Mobile/15E148 Safari/604.1"
 )
+DOUYIN_WEB_DETAIL_URL = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
 _VIDEO_ID_PATH = re.compile(r"/(?:video|share/video)/(\d+)(?:[/?#]|$)", re.IGNORECASE)
 _ROUTER_DATA_MARKER = re.compile(r"window\._ROUTER_DATA\s*=", re.IGNORECASE)
 
@@ -119,15 +129,12 @@ def _positive_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def build_official_playback(
-    source_url: str,
-    info: Mapping[str, Any],
-    share_page: str,
+def _playback_format_from_video(
+    video: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    video_id = _video_id(source_url, info)
-    detail = _playback_detail(parse_router_data(share_page), video_id)
-    video = detail["video"]
-    play_addr = video["play_addr"]
+    play_addr = video.get("play_addr")
+    if not isinstance(play_addr, Mapping):
+        raise DouyinOfficialPlaybackUnavailable("missing official playback uri")
     playback_uri = str(play_addr.get("uri") or "").strip()
     if not playback_uri or len(playback_uri) > 512 or any(ord(char) < 32 for char in playback_uri):
         raise DouyinOfficialPlaybackUnavailable("invalid official playback uri")
@@ -162,6 +169,19 @@ def build_official_playback(
     return raw_format, internal_source
 
 
+def build_official_playback(
+    source_url: str,
+    info: Mapping[str, Any],
+    share_page: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    video_id = _video_id(source_url, info)
+    detail = _playback_detail(parse_router_data(share_page), video_id)
+    video = detail["video"]
+    if not isinstance(video, Mapping):
+        raise DouyinOfficialPlaybackUnavailable("missing official video")
+    return _playback_format_from_video(video)
+
+
 def _first_public_url(value: Any) -> str | None:
     if not isinstance(value, Mapping):
         return None
@@ -171,29 +191,127 @@ def _first_public_url(value: Any) -> str | None:
     return next((url for url in urls if isinstance(url, str) and url.startswith("https://")), None)
 
 
+def _cookie_map(ydl: Any) -> dict[str, str]:
+    jar = getattr(ydl, "cookiejar", None)
+    if jar is None:
+        return {}
+    try:
+        getter = getattr(jar, "get_cookies_for_url", None)
+        cookies = getter("https://www.douyin.com/") if getter else list(jar)
+    except Exception:
+        try:
+            cookies = list(jar)
+        except Exception:
+            return {}
+    return {
+        str(cookie.name): str(cookie.value)
+        for cookie in cookies
+        if getattr(cookie, "value", None)
+    }
+
+
+def _cookie_int(cookies: Mapping[str, str], name: str, fallback: int) -> int:
+    value = _positive_int(cookies.get(name))
+    return value if value is not None else fallback
+
+
+def _cookie_header(cookies: Mapping[str, str]) -> str:
+    return "; ".join(
+        f"{name}={value}"
+        for name, value in cookies.items()
+        if not any(ord(char) < 32 for char in name + value)
+    )
+
+
+def _fetch_web_detail(ydl: Any, video_id: str) -> dict[str, Any]:
+    cookies = _cookie_map(ydl)
+    if pick_uifid(cookies) is None:
+        raise DouyinOfficialPlaybackUnavailable(
+            "douyin session is missing UIFID_TEMP; re-import browser cookies"
+        )
+    try:
+        query, signature_headers = sign_detail_query(
+            video_id=video_id,
+            user_agent=DOUYIN_DESKTOP_USER_AGENT,
+            cookies=cookies,
+            screen_width=_cookie_int(cookies, "dy_swidth", 1920),
+            screen_height=_cookie_int(cookies, "dy_sheight", 1080),
+        )
+        request = Request(
+            f"{DOUYIN_WEB_DETAIL_URL}?{query}",
+            headers={
+                "User-Agent": DOUYIN_DESKTOP_USER_AGENT,
+                "Referer": "https://www.douyin.com/",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Cookie": _cookie_header(cookies),
+                **signature_headers,
+            },
+        )
+        response = ydl.urlopen(request)
+        try:
+            raw = response.read(2_000_001)
+        finally:
+            response.close()
+    except DouyinOfficialPlaybackUnavailable:
+        raise
+    except Exception as exc:
+        raise DouyinOfficialPlaybackUnavailable(
+            f"douyin web detail request failed ({type(exc).__name__})"
+        ) from exc
+
+    if len(raw) > 2_000_000:
+        raise DouyinOfficialPlaybackUnavailable("douyin web detail response is too large")
+    try:
+        payload = json.loads(raw.decode("utf-8", "replace"))
+    except (UnicodeDecodeError, TypeError, ValueError) as exc:
+        raise DouyinOfficialPlaybackUnavailable("invalid douyin web detail response") from exc
+    if not isinstance(payload, Mapping):
+        raise DouyinOfficialPlaybackUnavailable("invalid douyin web detail response")
+    detail = payload.get("aweme_detail")
+    if not isinstance(detail, Mapping):
+        status = payload.get("status_code")
+        raise DouyinOfficialPlaybackUnavailable(f"douyin web detail unavailable (status {status})")
+    detail_id = str(detail.get("aweme_id") or "")
+    if detail_id and detail_id != video_id:
+        raise DouyinOfficialPlaybackUnavailable("douyin web detail returned another video")
+    return dict(detail)
+
+
 def _fetch_share_page(ydl: Any, video_id: str) -> str:
     share_url = f"https://www.iesdouyin.com/share/video/{video_id}"
-    response = ydl.urlopen(share_url)
+    response = ydl.urlopen(
+        Request(
+            share_url,
+            headers={
+                "User-Agent": DOUYIN_MOBILE_USER_AGENT,
+                "Referer": "https://www.douyin.com/",
+            },
+        )
+    )
     try:
         return response.read(10_000_001).decode("utf-8", "replace")
     finally:
         response.close()
 
 
-def extract_official_douyin_info(ydl: Any, source_url: str) -> dict[str, Any]:
-    """Build a complete fallback result from Douyin's official share-page data."""
-
-    video_id = _video_id(source_url, {})
-    share_page = _fetch_share_page(ydl, video_id)
-    router_data = parse_router_data(share_page)
-    detail = _playback_detail(router_data, video_id)
-    raw_format, internal_source = build_official_playback(source_url, {}, share_page)
+def _info_from_detail(
+    source_url: str,
+    video_id: str,
+    detail: Mapping[str, Any],
+) -> dict[str, Any]:
     video_value = detail.get("video")
     author_value = detail.get("author")
     video: Mapping[str, Any] = video_value if isinstance(video_value, Mapping) else {}
     author: Mapping[str, Any] = author_value if isinstance(author_value, Mapping) else {}
+    raw_format, internal_source = _playback_format_from_video(video)
     duration_ms = _positive_int(video.get("duration"))
     title = str(detail.get("desc") or "Douyin video").strip()[:300] or "Douyin video"
+    webpage_url = (
+        f"https://www.iesdouyin.com/share/video/{video_id}"
+        if is_official_share_url(source_url)
+        else f"https://www.douyin.com/video/{video_id}"
+    )
     return {
         "id": video_id,
         "title": title,
@@ -201,7 +319,7 @@ def extract_official_douyin_info(ydl: Any, source_url: str) -> dict[str, Any]:
         "uploader": str(author.get("nickname") or "").strip()[:200] or None,
         "duration": duration_ms / 1000 if duration_ms else None,
         "thumbnail": _first_public_url(video.get("cover")),
-        "webpage_url": f"https://www.iesdouyin.com/share/video/{video_id}",
+        "webpage_url": webpage_url,
         "extractor": "mediafetch:douyin:official",
         "extractor_key": "MediaFetchDouyinOfficial",
         "formats": [raw_format],
@@ -209,12 +327,41 @@ def extract_official_douyin_info(ydl: Any, source_url: str) -> dict[str, Any]:
     }
 
 
+def extract_official_douyin_info(ydl: Any, source_url: str) -> dict[str, Any]:
+    """Build a complete fallback result from Douyin's official share-page data."""
+
+    video_id = _video_id(source_url, {})
+    try:
+        detail = _fetch_web_detail(ydl, video_id)
+    except DouyinOfficialPlaybackUnavailable as web_error:
+        try:
+            share_page = _fetch_share_page(ydl, video_id)
+            detail = _playback_detail(parse_router_data(share_page), video_id)
+        except DouyinOfficialPlaybackUnavailable:
+            raise web_error from None
+        except Exception:
+            raise web_error from None
+    return _info_from_detail(source_url, video_id, detail)
+
+
 def add_official_playback_format(ydl: Any, source_url: str, info: dict[str, Any]) -> bool:
     """Append one server-generated official playback candidate to a yt-dlp result."""
 
     video_id = _video_id(source_url, info)
-    page = _fetch_share_page(ydl, video_id)
-    raw_format, internal_source = build_official_playback(source_url, info, page)
+    try:
+        detail = _fetch_web_detail(ydl, video_id)
+    except DouyinOfficialPlaybackUnavailable as web_error:
+        try:
+            page = _fetch_share_page(ydl, video_id)
+            detail = _playback_detail(parse_router_data(page), video_id)
+        except DouyinOfficialPlaybackUnavailable:
+            raise web_error from None
+        except Exception:
+            raise web_error from None
+    video = detail.get("video")
+    if not isinstance(video, Mapping):
+        raise DouyinOfficialPlaybackUnavailable("missing official video")
+    raw_format, internal_source = _playback_format_from_video(video)
 
     formats = info.setdefault("formats", [])
     if not isinstance(formats, list):
