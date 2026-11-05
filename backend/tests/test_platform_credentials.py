@@ -202,6 +202,35 @@ def test_xiaohongshu_import_drops_short_link_cdn_and_unrelated_cookie_rows():
     assert {cookie.domain for cookie in saved} == {".xiaohongshu.com"}
 
 
+def test_import_skips_empty_name_rows_without_rejecting_the_file():
+    content = cookie_export(
+        ".douyin.com\tTRUE\t/\tTRUE\t4102444800\tsessionid\ttest-only",
+        ".douyin.com\tTRUE\t/\tTRUE\t4102444800\t\ttest-only",
+        ".douyin.com\tTRUE\t/\tTRUE\t4102444800\tttwid\ttest-only",
+    )
+
+    result = save_platform_cookie_file("douyin", content)
+
+    assert result["cookie_count"] == 2
+    saved = MozillaCookieJar(str(platform_cookie_file("douyin")))
+    saved.load()
+    assert {(cookie.domain, cookie.name) for cookie in saved} == {
+        (".douyin.com", "sessionid"),
+        (".douyin.com", "ttwid"),
+    }
+
+
+def test_import_rejects_file_with_only_empty_name_rows():
+    with pytest.raises(AppError) as caught:
+        save_platform_cookie_file(
+            "douyin",
+            cookie_export(".douyin.com\tTRUE\t/\tTRUE\t4102444800\t\ttest-only"),
+        )
+
+    assert caught.value.code == "INVALID_COOKIE_FILE"
+    assert not platform_cookie_file("douyin").exists()
+
+
 @pytest.mark.parametrize(
     "platform, domain", [("douyin", ".douyin.com"), ("xiaohongshu", ".xiaohongshu.com")]
 )
@@ -232,7 +261,6 @@ def test_import_rejects_all_expired_platform_rows_even_with_live_unrelated_rows(
         cookie_export(".douyin.com\tTRUE\t/\tINVALID\t4102444800\tsession\ttest-only"),
         cookie_export(".douyin.com\tTRUE\tnot-a-path\tTRUE\t4102444800\tsession\ttest-only"),
         cookie_export(".douyin.com\tTRUE\t/\tTRUE\tinvalid\tsession\ttest-only"),
-        cookie_export(".douyin.com\tTRUE\t/\tTRUE\t4102444800\t\ttest-only"),
         cookie_export(".douyin.com\tTRUE\t/\tTRUE\t4102444800\tsession\ttest\x01only"),
     ],
     ids=[
@@ -246,7 +274,6 @@ def test_import_rejects_all_expired_platform_rows_even_with_live_unrelated_rows(
         "secure-flag",
         "path",
         "expiry",
-        "name",
         "control-character",
     ],
 )

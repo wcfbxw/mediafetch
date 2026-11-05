@@ -180,7 +180,11 @@ def _parse_netscape_cookie_file(platform: PlatformCookieName, content: bytes) ->
             raise error("INVALID_COOKIE_FILE")
         if secure.upper() not in {"TRUE", "FALSE"}:
             raise error("INVALID_COOKIE_FILE")
-        if not path.startswith("/") or not name or any(ord(char) < 32 for char in name + value):
+        if not path.startswith("/"):
+            raise error("INVALID_COOKIE_FILE")
+        if not name:
+            continue
+        if any(ord(char) < 32 for char in name + value):
             raise error("INVALID_COOKIE_FILE")
         try:
             raw_expires = int(expires_text)
