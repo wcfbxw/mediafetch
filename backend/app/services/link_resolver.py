@@ -13,6 +13,8 @@ from app.core.errors import AppError, error
 from app.core.security import (
     REDIRECT_STATUSES,
     _resolved_addresses,
+    get_ytdlp_proxy,
+    is_proxy_endpoint,
     validate_public_url,
     validate_resolved_addresses,
 )
@@ -55,8 +57,9 @@ class PinnedAsyncNetworkBackend(httpcore.AsyncNetworkBackend):
     gap between URL validation and the HTTP client's own DNS lookup.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, proxy: str | None = None) -> None:
         self._backend = httpcore.AnyIOBackend()
+        self._proxy = proxy
 
     async def connect_tcp(
         self,
@@ -70,13 +73,11 @@ class PinnedAsyncNetworkBackend(httpcore.AsyncNetworkBackend):
         try:
             literal = ipaddress.ip_address(normalized_host)
         except ValueError:
-            addresses = validate_resolved_addresses(
-                await asyncio.to_thread(_resolved_addresses, normalized_host, port)
-            )
+            addresses = await asyncio.to_thread(_resolved_addresses, normalized_host, port)
         else:
-            if not literal.is_global:
-                raise error("BLOCKED_ADDRESS")
             addresses = {str(literal)}
+        if not is_proxy_endpoint(normalized_host, port, self._proxy):
+            addresses = validate_resolved_addresses(addresses)
 
         last_error: Exception | None = None
         for address in sorted(addresses):
@@ -107,21 +108,28 @@ class PinnedAsyncNetworkBackend(httpcore.AsyncNetworkBackend):
 
 
 class SSRFSafeAsyncHTTPTransport(httpx.AsyncHTTPTransport):
-    """HTTPX transport backed by the DNS-validating, IP-pinned connector."""
+    """Validate targets, then connect through a proxy or a checked, pinned IP."""
 
     def __init__(self) -> None:
         ssl_context = ssl.create_default_context(cafile=certifi.where())
-        super().__init__(verify=ssl_context, trust_env=False, retries=0)
-        self._pool = httpcore.AsyncConnectionPool(
-            ssl_context=ssl_context,
-            max_connections=10,
-            max_keepalive_connections=5,
-            keepalive_expiry=10.0,
-            http1=True,
-            http2=False,
+        proxy = get_ytdlp_proxy()
+        super().__init__(
+            verify=ssl_context,
+            proxy=proxy,
+            trust_env=False,
             retries=0,
-            network_backend=PinnedAsyncNetworkBackend(),
+            limits=httpx.Limits(
+                max_connections=10, max_keepalive_connections=5, keepalive_expiry=10.0
+            ),
         )
+        # HTTPX does not expose a network_backend argument. Keep its proxy,
+        # authentication and TLS setup, replacing only the TCP connector before
+        # the pool has opened any connections (also for HTTP CONNECT tunnels).
+        self._pool._network_backend = PinnedAsyncNetworkBackend(proxy=proxy)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await validate_public_url(str(request.url))
+        return await super().handle_async_request(request)
 
 
 class LinkResolver:

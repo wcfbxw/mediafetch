@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import functools
 import hashlib
 import http.client
@@ -12,11 +13,11 @@ import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin, urlsplit
 
 from redis import Redis
 from yt_dlp import YoutubeDL
-from yt_dlp.networking._urllib import HTTPHandler, RedirectHandler, UrllibRH
+from yt_dlp.networking._urllib import HTTPHandler, ProxyHandler, RedirectHandler, UrllibRH
 from yt_dlp.utils import DownloadError
 
 from app.core.config import get_settings
@@ -24,6 +25,8 @@ from app.core.errors import AppError, error
 from app.core.logging import redact_url
 from app.core.security import (
     _resolved_addresses,
+    get_ytdlp_proxy,
+    is_proxy_endpoint,
     validate_public_url_sync,
     validate_resolved_addresses,
 )
@@ -68,11 +71,31 @@ class ValidatingRedirectHandler(RedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, checked_url)
 
 
+class ConfiguredProxyHandler(ProxyHandler):
+    """Do not let system proxy bypass settings override the operator's route."""
+
+    def proxy_open(self, req):
+        proxy = get_ytdlp_proxy()
+        if not proxy:
+            return None
+        parsed = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+        if parsed.scheme != "http":
+            return super().proxy_open(req)
+        if parsed.username is not None:
+            credentials = f"{unquote(parsed.username)}:{unquote(parsed.password or '')}"
+            auth = base64.b64encode(credentials.encode()).decode("ascii")
+            req.add_header("Proxy-Authorization", f"Basic {auth}")
+        req.set_proxy(parsed.netloc.rsplit("@", 1)[-1], parsed.scheme)
+        return None
+
+
 def _create_pinned_connection(http_class, source_address, *args, **kwargs):
     connection = http_class(*args, **kwargs)
     hostname = connection.host
     port = connection.port
-    addresses = validate_resolved_addresses(_resolved_addresses(hostname, port))
+    addresses = _resolved_addresses(hostname, port)
+    if not is_proxy_endpoint(hostname, port, get_ytdlp_proxy()):
+        addresses = validate_resolved_addresses(addresses)
 
     def connect(
         _target,
@@ -137,9 +160,10 @@ class SafeUrllibRH(UrllibRH):
         default_opener = super()._create_instance(proxies, cookiejar, legacy_ssl_support)
         opener = urllib.request.OpenerDirector()
         for handler in default_opener.handlers:
-            if isinstance(handler, HTTPHandler | RedirectHandler):
+            if isinstance(handler, HTTPHandler | RedirectHandler | ProxyHandler):
                 continue
             opener.add_handler(handler)
+        opener.add_handler(ConfiguredProxyHandler(proxies))
         opener.add_handler(
             PinnedHTTPHandler(
                 debuglevel=int(bool(self.verbose)),
@@ -153,10 +177,14 @@ class SafeUrllibRH(UrllibRH):
 
 
 class SafeYoutubeDL(YoutubeDL):
-    """Revalidate DNS for every extractor, redirect and manifest request."""
+    """Validate every target, delegating target DNS only to a configured proxy."""
 
     def __init__(self, params=None, auto_init=True):
         safe_params = dict(params or {})
+        # Keep the configured route authoritative, including per-request yt-dlp
+        # overrides; without it, explicitly disable ambient environment proxies.
+        safe_params["proxy"] = get_ytdlp_proxy() or ""
+        safe_params["geo_verification_proxy"] = safe_params["proxy"]
         self._credential_snapshot: Path | None = None
         cookiefile = safe_params.get("cookiefile")
         if isinstance(cookiefile, str) and is_managed_cookie_file(cookiefile):
@@ -201,6 +229,8 @@ class SafeYoutubeDL(YoutubeDL):
     def urlopen(self, req):
         request_url = getattr(req, "url", None) or str(req)
         validate_public_url_sync(request_url)
+        if hasattr(req, "proxies"):
+            req.proxies = dict(self.proxies)
         return super().urlopen(req)
 
 

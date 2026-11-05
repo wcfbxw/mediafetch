@@ -14,6 +14,7 @@ import type {
 const TOKEN_STORAGE_KEY = "mediafetch-admin-token";
 const PLATFORMS: Array<{ id: OperatorPlatform; name: string; hint: string }> = [
   { id: "douyin", name: "抖音", hint: "新鲜的 douyin.com 会话" },
+  { id: "xiaohongshu", name: "小红书", hint: "xiaohongshu.com 登录会话" },
   { id: "instagram", name: "Instagram", hint: "instagram.com 登录会话" },
   { id: "youtube", name: "YouTube", hint: "youtube.com / google.com 登录会话" },
 ];
@@ -96,7 +97,7 @@ export function PlatformCookiePanel() {
       <p className="text-xs font-black uppercase tracking-[0.18em] text-cobalt-600 dark:text-indigo-300">Cookie sessions</p>
       <h2 className="mt-2 text-xl font-black">其他平台会话</h2>
       <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
-        这些平台没有可安全接入的扫码接口。请从已登录浏览器导出当前平台的 Netscape cookies.txt；文件只允许包含对应平台域名，最大 128 KB。
+        这些平台没有可安全接入的扫码接口。请从已登录浏览器导出当前平台的 Netscape cookies.txt，最大 128 KB。导入时只保留对应平台的未过期 Cookie，其他域名会被忽略。
       </p>
 
       <div className="mt-5 space-y-4">

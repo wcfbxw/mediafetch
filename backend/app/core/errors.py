@@ -40,7 +40,7 @@ ERROR_MESSAGES: dict[str, tuple[str, int]] = {
     "ADMIN_UNAUTHORIZED": ("管理员凭证无效", 401),
     "PLATFORM_LOGIN_FAILED": ("平台登录失败，请重新生成二维码", 502),
     "PLATFORM_LOGIN_EXPIRED": ("登录二维码已过期", 410),
-    "INVALID_COOKIE_FILE": ("Cookie 文件无效、已过期或包含非目标平台域名", 400),
+    "INVALID_COOKIE_FILE": ("Cookie 文件格式无效、超过 128 KB 或没有未过期的目标平台 Cookie", 400),
     "INTERNAL_ERROR": ("服务器暂时无法处理请求", 500),
 }
 

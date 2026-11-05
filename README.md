@@ -86,11 +86,18 @@ API 和 worker 只会在目标主机属于 `bilibili.com` 或 `b23.tv` 时使用
 平台接口及 yt-dlp 支持情况决定；疑似 DRM 的格式仍会被拒绝。请使用专门账号，并在不再需要时
 删除平台会话或撤销对应登录设备。
 
-抖音、Instagram 和 YouTube 没有接入账号密码登录，也没有向普通访客开放 Cookie。管理员可在
+抖音、小红书、Instagram 和 YouTube 没有接入账号密码登录，也没有向普通访客开放 Cookie。管理员可在
 同一 `/admin` 页面导入从已登录浏览器导出的当前平台 Netscape `cookies.txt`。后端限制文件为
-128 KB，并逐条校验 Cookie 域名：抖音只允许 `douyin.com` / `iesdouyin.com`，Instagram 只允许
-`instagram.com`，YouTube 只允许 `youtube.com` / `google.com`。混入其他域名的文件会被整体拒绝。
-不要导出整个浏览器的 Cookie 数据库。
+128 KB，并逐条校验七列格式、字段和有效期，只保存目标平台白名单域名及其子域的未过期 Cookie：
+抖音为 `douyin.com` / `iesdouyin.com`，小红书为 `xiaohongshu.com`，Instagram 为 `instagram.com`，
+YouTube 为 `youtube.com` / `youtu.be` / `google.com`。混入其他域名（包括抖音导出中的
+`bytedance.com`）时会丢弃这些行，不会扩大白名单或拒绝整份有效文件；过滤后没有有效目标 Cookie、
+文件格式无效或文件超限时仍会拒绝，且保留旧会话。不要导出整个浏览器的 Cookie 数据库。
+
+小红书沿用固定版本 yt-dlp 的 `XiaoHongShu` 专用提取器，它读取 `www.xiaohongshu.com` 页面，
+再请求 `xhscdn.com` 媒体。`xhslink.com` 分享短链由现有 LinkResolver 还原；这两个域名不需要
+导入登录 Cookie，因此不在小红书 Cookie 白名单中。解析与下载均使用同一个受控小红书会话，
+Cookie 仍由 CookieJar 按域名限制发送，不会发送给短链、CDN 或其他平台。
 
 会话文件保存在不对 Nginx 暴露的 `/credentials` 卷中。每次 yt-dlp 操作只使用一个进程私有快照，
 结束后立即删除，避免 API 与 worker 同时更新同一个 Cookie 文件。快手公开作品使用 MediaFetch
@@ -239,7 +246,7 @@ Hook 接口刻意不提供修改或返回媒体 URL、格式选择器、yt-dlp �
 | `RATE_LIMIT_INSPECT_PER_MINUTE` | `20` | 每 IP 每分钟解析次数 |
 | `RATE_LIMIT_DOWNLOAD_PER_MINUTE` | `10` | 每 IP 每分钟建任务次数 |
 | `AUDIO_MP3_QUALITY` | `2` | FFmpeg LAME VBR 质量，0 最佳、9 最小 |
-| `YTDLP_PROXY` | 空 | 仅运维人员可配置的 yt-dlp 出站代理 |
+| `YTDLP_PROXY` | 空 | 仅运维人员可配置的出站代理；短链预检、解析和下载统一使用 |
 | `PARALLEL_DOWNLOAD_ENABLED` | `true` | 对支持 Range 的哔哩哔哩直连媒体启用安全分段下载 |
 | `PARALLEL_DOWNLOAD_CONNECTIONS` | `8` | 单个媒体轨的并发连接数，允许 1–16 |
 | `PARALLEL_DOWNLOAD_MIN_SPLIT_SIZE_MB` | `4` | 每个并发分段的最小目标大小 |
@@ -249,6 +256,15 @@ Hook 接口刻意不提供修改或返回媒体 URL、格式选择器、yt-dlp �
 | `HTTP_PORT` | `80` | Compose 暴露的 HTTP 端口 |
 
 修改 `NEXT_PUBLIC_API_BASE` 后必须重新构建前端镜像。
+
+NAS / Docker 网关代理可配置为 `YTDLP_PROXY=http://172.21.0.1:7890`，API 与 worker
+应使用相同配置并重建容器。配置代理后，短链预检、yt-dlp 解析与媒体下载均经过该代理，
+公共目标域名交给代理解析，不会因本地 fake-ip（例如 `2001::1`、`198.18.0.1`）误报
+`BLOCKED_ADDRESS`。TCP 连接仅对配置中的代理主机与端口豁免私网检查；这不是目标 URL 白名单，
+用户仍不能提交代理自身或其他私网 IP 的 URL，重定向也受相同限制。环回、链路本地、
+非全局 IP 字面量和已知本地域名继续拦截。代理负责公共域名最终解析及其出站访问策略，
+运维应在代理侧阻止内网和元数据地址访问。清空 `YTDLP_PROXY` 后恢复原有全量 DNS/IP 检查与
+连接 IP 固定，且不继承系统 `HTTP_PROXY` / `HTTPS_PROXY`；系统 `NO_PROXY` 不会绕过配置的代理。
 
 ## Nginx 与 HTTPS
 
@@ -367,8 +383,10 @@ signature、key 和 password 等字段。API 错误只返回统一错误代码�
 
 ### `BLOCKED_ADDRESS`
 
-域名解析到私有、环回、链路本地、保留或其他非全局 IP，或重定向目标属于这些范围。
-这是 SSRF 防护的预期行为。不要通过关闭检查来支持内网站点。
+未配置 `YTDLP_PROXY` 时，域名解析到私有、环回、链路本地、保留或其他非全局 IP，
+或重定向目标属于这些范围，均会被拒绝。配置代理时，公共域名不做本地 DNS/IP 拒绝，
+但私网 IP 目标及已知本地域名仍被拦截；仅连接运维指定的代理主机与端口有私网豁免。
+不要通过关闭检查来支持内网站点；代理配置方式和代理侧访问限制见上方环境变量说明。
 
 ### `DRM_PROTECTED`、`LOGIN_REQUIRED` 或 `PRIVATE_VIDEO`
 

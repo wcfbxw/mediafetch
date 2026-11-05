@@ -1,5 +1,3 @@
-from typing import Literal
-
 from fastapi import APIRouter, Depends, File, UploadFile
 
 from app.core.admin import require_admin
@@ -22,7 +20,7 @@ router = APIRouter(
 
 @router.get("/{platform}/status", response_model=PlatformSessionStatus)
 async def session_status(
-    platform: Literal["douyin", "instagram", "youtube"],
+    platform: PlatformCookieName,
 ) -> PlatformSessionStatus:
     return PlatformSessionStatus.model_validate(platform_session_status(platform))
 
@@ -44,7 +42,7 @@ async def upload_cookies(
 
 @router.delete("/{platform}/session", response_model=PlatformSessionStatus)
 async def delete_session(
-    platform: Literal["douyin", "instagram", "youtube"],
+    platform: PlatformCookieName,
 ) -> PlatformSessionStatus:
     clear_platform_session(platform)
     return PlatformSessionStatus(configured=False)
