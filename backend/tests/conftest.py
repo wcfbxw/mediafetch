@@ -13,6 +13,7 @@ def test_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("STORAGE_ROOT", str(tmp_path / "storage"))
     monkeypatch.setenv("CREDENTIALS_ROOT", str(tmp_path / "credentials"))
     monkeypatch.setenv("MAX_FILE_SIZE_MB", "16")
+    monkeypatch.setenv("YTDLP_PROXY", "")
     get_settings.cache_clear()
     settings = get_settings()
     settings.ensure_storage()

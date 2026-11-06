@@ -1,10 +1,12 @@
 import asyncio
+import base64
 import functools
 import hashlib
 import http.client
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -12,11 +14,11 @@ import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin, urlsplit
 
 from redis import Redis
 from yt_dlp import YoutubeDL
-from yt_dlp.networking._urllib import HTTPHandler, RedirectHandler, UrllibRH
+from yt_dlp.networking._urllib import HTTPHandler, ProxyHandler, RedirectHandler, UrllibRH
 from yt_dlp.utils import DownloadError
 
 from app.core.config import get_settings
@@ -24,6 +26,8 @@ from app.core.errors import AppError, error
 from app.core.logging import redact_url
 from app.core.security import (
     _resolved_addresses,
+    get_ytdlp_proxy,
+    is_proxy_endpoint,
     validate_public_url_sync,
     validate_resolved_addresses,
 )
@@ -45,6 +49,8 @@ from app.services.platform_credentials import (
 )
 
 logger = logging.getLogger(__name__)
+
+_DOUYIN_VIDEO_ID = re.compile(r"/(?:video|share/video)/(\d+)(?:[/?#]|$)", re.IGNORECASE)
 
 
 class QuietLogger:
@@ -68,11 +74,31 @@ class ValidatingRedirectHandler(RedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, checked_url)
 
 
+class ConfiguredProxyHandler(ProxyHandler):
+    """Do not let system proxy bypass settings override the operator's route."""
+
+    def proxy_open(self, req):
+        proxy = get_ytdlp_proxy()
+        if not proxy:
+            return None
+        parsed = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+        if parsed.scheme != "http":
+            return super().proxy_open(req)
+        if parsed.username is not None:
+            credentials = f"{unquote(parsed.username)}:{unquote(parsed.password or '')}"
+            auth = base64.b64encode(credentials.encode()).decode("ascii")
+            req.add_header("Proxy-Authorization", f"Basic {auth}")
+        req.set_proxy(parsed.netloc.rsplit("@", 1)[-1], parsed.scheme)
+        return None
+
+
 def _create_pinned_connection(http_class, source_address, *args, **kwargs):
     connection = http_class(*args, **kwargs)
     hostname = connection.host
     port = connection.port
-    addresses = validate_resolved_addresses(_resolved_addresses(hostname, port))
+    addresses = _resolved_addresses(hostname, port)
+    if not is_proxy_endpoint(hostname, port, get_ytdlp_proxy()):
+        addresses = validate_resolved_addresses(addresses)
 
     def connect(
         _target,
@@ -137,9 +163,10 @@ class SafeUrllibRH(UrllibRH):
         default_opener = super()._create_instance(proxies, cookiejar, legacy_ssl_support)
         opener = urllib.request.OpenerDirector()
         for handler in default_opener.handlers:
-            if isinstance(handler, HTTPHandler | RedirectHandler):
+            if isinstance(handler, HTTPHandler | RedirectHandler | ProxyHandler):
                 continue
             opener.add_handler(handler)
+        opener.add_handler(ConfiguredProxyHandler(proxies))
         opener.add_handler(
             PinnedHTTPHandler(
                 debuglevel=int(bool(self.verbose)),
@@ -153,10 +180,14 @@ class SafeUrllibRH(UrllibRH):
 
 
 class SafeYoutubeDL(YoutubeDL):
-    """Revalidate DNS for every extractor, redirect and manifest request."""
+    """Validate every target, delegating target DNS only to a configured proxy."""
 
     def __init__(self, params=None, auto_init=True):
         safe_params = dict(params or {})
+        # Keep the configured route authoritative, including per-request yt-dlp
+        # overrides; without it, explicitly disable ambient environment proxies.
+        safe_params["proxy"] = get_ytdlp_proxy() or ""
+        safe_params["geo_verification_proxy"] = safe_params["proxy"]
         self._credential_snapshot: Path | None = None
         cookiefile = safe_params.get("cookiefile")
         if isinstance(cookiefile, str) and is_managed_cookie_file(cookiefile):
@@ -201,6 +232,8 @@ class SafeYoutubeDL(YoutubeDL):
     def urlopen(self, req):
         request_url = getattr(req, "url", None) or str(req)
         validate_public_url_sync(request_url)
+        if hasattr(req, "proxies"):
+            req.proxies = dict(self.proxies)
         return super().urlopen(req)
 
 
@@ -217,6 +250,31 @@ def map_ytdlp_error(exc: Exception) -> AppError:
     if any(marker in message for marker in ("unsupported url", "no suitable extractor")):
         return error("UNSUPPORTED_URL")
     return error("UNSUPPORTED_URL")
+
+
+def _douyin_web_url(source_url: str) -> str | None:
+    match = _DOUYIN_VIDEO_ID.search(urlsplit(source_url).path)
+    if match is None:
+        return None
+    return f"https://www.douyin.com/video/{match.group(1)}"
+
+
+def _douyin_extraction_error(
+    ytdlp_error: DownloadError,
+    official_error: DouyinOfficialPlaybackUnavailable,
+) -> AppError:
+    message = f"{ytdlp_error} {official_error}".lower()
+    if "uifid" in message or "missing douyin visitor cookie" in message:
+        return error(
+            "LOGIN_REQUIRED",
+            message="抖音 Cookie 缺少访客标识，请在 /admin 重新导入完整浏览器 Cookie",
+        )
+    if any(marker in message for marker in ("fresh cookies", "403", "validate error")):
+        return error(
+            "LOGIN_REQUIRED",
+            message="抖音解析被风控拦截，请在 /admin 重新导入包含 UIFID_TEMP 的抖音 Cookie",
+        )
+    return error("VIDEO_UNAVAILABLE", message="抖音暂时没有返回可播放地址，请稍后重试")
 
 
 def _safe_thumbnail(info: dict[str, Any]) -> str | None:
@@ -250,24 +308,44 @@ def _extract_sync(url: str, parser_hook: VideoParserHook | None = None) -> dict[
     try:
         with SafeYoutubeDL(options) as ydl:
             ytdlp_error: DownloadError | None = None
+            official_error: DouyinOfficialPlaybackUnavailable | None = None
             is_douyin = parser_hook is not None and parser_hook.name == "douyin-official-formats"
             official_only = is_douyin and is_official_share_url(url)
+            result: dict[str, Any] | None = None
+
             if official_only:
-                result = extract_official_douyin_info(ydl, url)
-            else:
-                try:
-                    result = ydl.extract_info(url, download=False)
-                except DownloadError as exc:
-                    ytdlp_error = exc
-                    result = None
-            if result is None and is_douyin:
                 try:
                     result = extract_official_douyin_info(ydl, url)
                 except DouyinOfficialPlaybackUnavailable as exc:
+                    official_error = exc
+
+            if result is None:
+                extract_url = _douyin_web_url(url) if official_only else None
+                try:
+                    result = ydl.extract_info(extract_url or url, download=False)
+                except DownloadError as exc:
+                    ytdlp_error = exc
+                    result = None
+
+            if result is None and is_douyin:
+                if official_error is None:
+                    try:
+                        result = extract_official_douyin_info(ydl, url)
+                    except DouyinOfficialPlaybackUnavailable as exc:
+                        official_error = exc
+                if result is None:
+                    if ytdlp_error is not None and official_error is not None:
+                        raise _douyin_extraction_error(ytdlp_error, official_error) from ytdlp_error
                     if ytdlp_error is not None:
-                        raise ytdlp_error from exc
-                    raise
-            elif isinstance(result, dict) and is_douyin and not official_only:
+                        raise ytdlp_error
+                    if official_error is not None:
+                        raise official_error
+            elif (
+                isinstance(result, dict)
+                and is_douyin
+                and not official_only
+                and ytdlp_error is None
+            ):
                 try:
                     add_official_playback_format(ydl, url, result)
                 except DouyinOfficialPlaybackUnavailable:
@@ -281,8 +359,6 @@ def _extract_sync(url: str, parser_hook: VideoParserHook | None = None) -> dict[
                         redact_url(url),
                         type(exc).__name__,
                     )
-            elif result is None and ytdlp_error is not None:
-                raise ytdlp_error
     except AppError:
         raise
     except DownloadError as exc:

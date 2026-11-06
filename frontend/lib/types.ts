@@ -67,7 +67,7 @@ export type PlatformSessionStatus = {
   expires_at: number | null;
 };
 
-export type OperatorPlatform = "douyin" | "instagram" | "youtube";
+export type OperatorPlatform = "douyin" | "xiaohongshu" | "instagram" | "youtube";
 
 export type BilibiliLoginStart = {
   login_id: string;

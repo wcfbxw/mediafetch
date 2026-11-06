@@ -99,8 +99,9 @@ def test_appends_candidate_and_keeps_media_url_internal():
             return None
 
     class YDL:
-        def urlopen(self, url):
-            assert url == f"https://www.iesdouyin.com/share/video/{video_id}"
+        def urlopen(self, request):
+            url = request if isinstance(request, str) else getattr(request, "url", "")
+            assert str(url).startswith(f"https://www.iesdouyin.com/share/video/{video_id}")
             return Response()
 
     info = {
@@ -144,3 +145,27 @@ def test_builds_complete_fallback_result_when_ytdlp_does_not_support_share_page(
     assert info["extractor_key"] == "MediaFetchDouyinOfficial"
     assert info["webpage_url"] == f"https://www.iesdouyin.com/share/video/{video_id}"
     assert info["formats"][0]["format_id"] == OFFICIAL_DOUYIN_FORMAT_ID
+
+
+def test_pick_uifid_reads_known_cookie_names():
+    from app.services.douyin_web_signature import pick_uifid
+
+    assert pick_uifid({"UIFID_TEMP": "temp-id"}) == "temp-id"
+    assert pick_uifid({"uifid": "plain"}) == "plain"
+    assert pick_uifid({}) is None
+
+
+def test_sign_detail_query_emits_a_bogus_and_secsdk_headers():
+    from app.services.douyin_web_signature import sign_detail_query
+
+    query, headers = sign_detail_query(
+        video_id="7480123456789012345",
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/143.0.0.0 Safari/537.36",
+        cookies={"UIFID_TEMP": "fixture-uifid"},
+    )
+
+    assert "aweme_id=7480123456789012345" in query
+    assert "a_bogus=" in query
+    assert headers["uifid"] == "fixture-uifid"
+    assert "x-secsdk-web-signature" in headers
+    assert "x-secsdk-web-expire" in headers

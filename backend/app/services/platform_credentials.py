@@ -9,27 +9,26 @@ from urllib.parse import urlsplit
 
 from app.core.config import get_settings
 from app.core.errors import error
+from app.services.douyin_official import DOUYIN_DESKTOP_USER_AGENT
 from app.services.kuaishou import KUAISHOU_MOBILE_USER_AGENT
 
-PlatformCookieName = Literal["douyin", "instagram", "youtube"]
+PlatformCookieName = Literal["douyin", "xiaohongshu", "instagram", "youtube"]
 
 BILIBILI_DOMAINS = ("bilibili.com", "b23.tv")
 PLATFORM_DOMAINS: dict[str, tuple[str, ...]] = {
     "bilibili": BILIBILI_DOMAINS,
     "douyin": ("douyin.com", "iesdouyin.com"),
+    # XiaoHongShuIE reads the official page; short links are resolved first.
+    "xiaohongshu": ("xiaohongshu.com",),
     "instagram": ("instagram.com",),
     "youtube": ("youtube.com", "youtu.be", "google.com"),
     "kuaishou": ("kuaishou.com", "chenzhongtech.com"),
 }
-COOKIE_PLATFORMS = frozenset({"bilibili", "douyin", "instagram", "youtube"})
-IMPORTABLE_COOKIE_PLATFORMS = frozenset({"douyin", "instagram", "youtube"})
+IMPORTABLE_COOKIE_PLATFORMS = frozenset({"douyin", "xiaohongshu", "instagram", "youtube"})
+COOKIE_PLATFORMS = IMPORTABLE_COOKIE_PLATFORMS | {"bilibili"}
 MAX_COOKIE_FILE_BYTES = 128 * 1024
 
-DESKTOP_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/143.0.0.0 Safari/537.36"
-)
+DESKTOP_USER_AGENT = DOUYIN_DESKTOP_USER_AGENT
 
 
 def _host_matches(hostname: str, domains: tuple[str, ...]) -> bool:
@@ -172,19 +171,27 @@ def _parse_netscape_cookie_file(platform: PlatformCookieName, content: bytes) ->
         if http_only:
             domain = domain.removeprefix("#HttpOnly_")
         normalized_domain = domain.lstrip(".").lower().rstrip(".")
-        if not normalized_domain or not _host_matches(normalized_domain, allowed_domains):
+        if not normalized_domain:
             raise error("INVALID_COOKIE_FILE")
         if include_subdomains.upper() not in {"TRUE", "FALSE"}:
             raise error("INVALID_COOKIE_FILE")
         if secure.upper() not in {"TRUE", "FALSE"}:
             raise error("INVALID_COOKIE_FILE")
-        if not path.startswith("/") or not name or any(ord(char) < 32 for char in name + value):
+        if not path.startswith("/"):
+            raise error("INVALID_COOKIE_FILE")
+        if not name:
+            continue
+        if any(ord(char) < 32 for char in name + value):
             raise error("INVALID_COOKIE_FILE")
         try:
             raw_expires = int(expires_text)
         except ValueError as exc:
             raise error("INVALID_COOKIE_FILE") from exc
         expires = raw_expires if raw_expires > 0 else None
+        # Browser exports can mix sites. Never persist unrelated cookies, but
+        # do not reject valid platform credentials because another site is present.
+        if not _host_matches(normalized_domain, allowed_domains):
+            continue
         if expires is not None and expires <= now:
             continue
         cookies.append(
@@ -239,6 +246,7 @@ def configure_ytdlp_credentials(options: dict[str, Any], url: str) -> None:
     else:
         referers = {
             "douyin": "https://www.douyin.com/",
+            "xiaohongshu": "https://www.xiaohongshu.com/",
             "instagram": "https://www.instagram.com/",
             "youtube": "https://www.youtube.com/",
         }

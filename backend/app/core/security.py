@@ -19,7 +19,37 @@ BLOCKED_HOSTNAMES = {
     "metadata",
     "metadata.google.internal",
 }
+LOCAL_HOSTNAME_SUFFIXES = (".localhost", ".local", ".localdomain", ".internal", ".home.arpa")
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+
+def get_ytdlp_proxy() -> str | None:
+    return (get_settings().ytdlp_proxy or "").strip() or None
+
+
+def is_proxy_endpoint(hostname: str, port: int, proxy: str | None) -> bool:
+    """Trust only the operator-configured proxy's exact TCP destination."""
+
+    if not proxy:
+        return False
+    try:
+        parsed = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+        default_port = {
+            "http": 80,
+            "https": 443,
+            "socks4": 1080,
+            "socks4a": 1080,
+            "socks5": 1080,
+            "socks5h": 1080,
+        }.get(parsed.scheme)
+        proxy_port = parsed.port or default_port
+    except ValueError:
+        return False
+    return (
+        default_port is not None
+        and hostname.strip("[]").rstrip(".").lower() == (parsed.hostname or "").rstrip(".").lower()
+        and port == proxy_port
+    )
 
 
 def canonicalize_url(value: str) -> str:
@@ -84,12 +114,28 @@ def validate_public_url_sync(value: str) -> str:
     url = canonicalize_url(value)
     parsed = urlsplit(url)
     hostname = parsed.hostname or ""
+    proxy = get_ytdlp_proxy()
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if is_proxy_endpoint(hostname, port, proxy):
+        # The exception is for opening a proxy connection, never for fetching
+        # that same endpoint as user-supplied content (even by hostname).
+        raise error("BLOCKED_ADDRESS")
     try:
         literal = ipaddress.ip_address(hostname.split("%", 1)[0])
     except ValueError:
-        validate_resolved_addresses(
-            _resolved_addresses(hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
-        )
+        if proxy:
+            # Only proxied DNS names may bypass local DNS. Keep literal private
+            # addresses (including legacy IPv4 spellings) and local names out.
+            try:
+                legacy_ip = ipaddress.ip_address(socket.inet_aton(hostname))
+            except OSError:
+                if "." not in hostname or hostname.endswith(LOCAL_HOSTNAME_SUFFIXES):
+                    raise error("BLOCKED_ADDRESS") from None
+            else:
+                if not legacy_ip.is_global:
+                    raise error("BLOCKED_ADDRESS")
+            return url
+        validate_resolved_addresses(_resolved_addresses(hostname, port))
     else:
         if not literal.is_global:
             raise error("BLOCKED_ADDRESS")
@@ -101,7 +147,21 @@ async def validate_public_url(value: str) -> str:
 
 
 def _probe_redirect(value: str) -> str | None:
-    """Issue a HEAD request while connecting to a previously validated IP."""
+    """Probe redirects through the configured proxy or a validated, pinned IP."""
+
+    if get_ytdlp_proxy():
+        # Use the same proxy-aware, redirect-validating transport as downloads;
+        # never fall back to a direct request after skipping target DNS checks.
+        from yt_dlp.networking import Request as YtdlpRequest
+
+        from app.services.extractor import SafeYoutubeDL
+
+        with SafeYoutubeDL({"quiet": True, "socket_timeout": 8}) as ydl:
+            response = ydl.urlopen(YtdlpRequest(value, method="HEAD"))
+            try:
+                return response.url if response.url != value else None
+            finally:
+                response.close()
 
     url = canonicalize_url(value)
     parsed = urlsplit(url)
@@ -165,8 +225,9 @@ def _probe_redirect(value: str) -> str | None:
 async def validate_redirect_chain(value: str) -> str:
     """Validate every redirect target before the extractor follows it.
 
-    yt-dlp additionally uses ``SafeYoutubeDL`` which repeats the DNS check for
-    every request, including redirects and media manifests.
+    yt-dlp additionally uses ``SafeYoutubeDL`` which repeats the target policy
+    for every request, including redirects and media manifests. With a proxy,
+    target DNS is delegated to that proxy; direct connections remain IP-pinned.
     """
 
     settings = get_settings()
