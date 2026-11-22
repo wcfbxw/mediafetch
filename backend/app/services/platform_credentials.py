@@ -11,18 +11,53 @@ from app.core.config import get_settings
 from app.core.errors import error
 from app.services.kuaishou import KUAISHOU_MOBILE_USER_AGENT
 
-PlatformCookieName = Literal["douyin", "instagram", "youtube"]
+PlatformCookieName = Literal[
+    "douyin",
+    "tiktok",
+    "xiaohongshu",
+    "kuaishou",
+    "weibo",
+    "twitter",
+    "instagram",
+    "youtube",
+]
 
 BILIBILI_DOMAINS = ("bilibili.com", "b23.tv")
 PLATFORM_DOMAINS: dict[str, tuple[str, ...]] = {
     "bilibili": BILIBILI_DOMAINS,
     "douyin": ("douyin.com", "iesdouyin.com"),
+    "tiktok": ("tiktok.com",),
+    "xiaohongshu": ("xiaohongshu.com", "xhslink.com"),
+    "kuaishou": ("kuaishou.com", "chenzhongtech.com", "gifshow.com"),
+    "weibo": ("weibo.com", "weibo.cn", "sina.com.cn"),
+    "twitter": ("x.com", "twitter.com"),
     "instagram": ("instagram.com",),
     "youtube": ("youtube.com", "youtu.be", "google.com"),
-    "kuaishou": ("kuaishou.com", "chenzhongtech.com"),
 }
-COOKIE_PLATFORMS = frozenset({"bilibili", "douyin", "instagram", "youtube"})
-IMPORTABLE_COOKIE_PLATFORMS = frozenset({"douyin", "instagram", "youtube"})
+PLATFORM_REFERERS: dict[str, str] = {
+    "bilibili": "https://www.bilibili.com/",
+    "douyin": "https://www.douyin.com/",
+    "tiktok": "https://www.tiktok.com/",
+    "xiaohongshu": "https://www.xiaohongshu.com/",
+    "kuaishou": "https://v.kuaishou.com/",
+    "weibo": "https://weibo.com/",
+    "twitter": "https://x.com/",
+    "instagram": "https://www.instagram.com/",
+    "youtube": "https://www.youtube.com/",
+}
+COOKIE_PLATFORMS = frozenset(PLATFORM_DOMAINS.keys())
+IMPORTABLE_COOKIE_PLATFORMS = frozenset(
+    {
+        "douyin",
+        "tiktok",
+        "xiaohongshu",
+        "kuaishou",
+        "weibo",
+        "twitter",
+        "instagram",
+        "youtube",
+    }
+)
 MAX_COOKIE_FILE_BYTES = 128 * 1024
 
 DESKTOP_USER_AGENT = (
@@ -42,6 +77,10 @@ def _platform_for_url(url: str) -> str | None:
         (name for name, domains in PLATFORM_DOMAINS.items() if _host_matches(hostname, domains)),
         None,
     )
+
+
+def platform_name_for_url(url: str) -> str | None:
+    return _platform_for_url(url)
 
 
 def is_bilibili_url(url: str) -> bool:
@@ -149,6 +188,29 @@ def clear_bilibili_session() -> None:
     clear_platform_session("bilibili")
 
 
+def cookie_header_for_url(url: str) -> str | None:
+    """Build a domain-scoped Cookie header for server-side official extractors."""
+
+    platform = _platform_for_url(url)
+    if not platform or platform not in COOKIE_PLATFORMS:
+        return None
+    jar = _load_cookie_jar(platform_cookie_file(platform))
+    if jar is None:
+        return None
+    hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
+    now = int(time.time())
+    pairs: list[str] = []
+    for cookie in jar:
+        if not cookie.name or not cookie.value:
+            continue
+        if cookie.expires and cookie.expires <= now:
+            continue
+        domain = cookie.domain.lstrip(".").lower().rstrip(".")
+        if domain and _host_matches(hostname, (domain,)):
+            pairs.append(f"{cookie.name}={cookie.value}")
+    return "; ".join(pairs) if pairs else None
+
+
 def _parse_netscape_cookie_file(platform: PlatformCookieName, content: bytes) -> list[Cookie]:
     if not content or len(content) > MAX_COOKIE_FILE_BYTES or b"\x00" in content:
         raise error("INVALID_COOKIE_FILE")
@@ -229,25 +291,30 @@ def configure_ytdlp_credentials(options: dict[str, Any], url: str) -> None:
     if platform == "bilibili":
         headers = {
             "User-Agent": settings.bilibili_user_agent,
-            "Referer": "https://www.bilibili.com/",
+            "Referer": PLATFORM_REFERERS["bilibili"],
         }
     elif platform == "kuaishou":
         headers = {
             "User-Agent": KUAISHOU_MOBILE_USER_AGENT,
-            "Referer": "https://v.kuaishou.com/",
+            "Referer": PLATFORM_REFERERS["kuaishou"],
         }
     else:
-        referers = {
-            "douyin": "https://www.douyin.com/",
-            "instagram": "https://www.instagram.com/",
-            "youtube": "https://www.youtube.com/",
+        headers = {
+            "User-Agent": DESKTOP_USER_AGENT,
+            "Referer": PLATFORM_REFERERS[platform],
         }
-        headers = {"User-Agent": DESKTOP_USER_AGENT, "Referer": referers[platform]}
     existing_headers = options.get("http_headers")
     options["http_headers"] = {
         **(cast(dict[str, str], existing_headers) if isinstance(existing_headers, dict) else {}),
         **headers,
     }
+
+    if platform == "youtube" and settings.youtube_po_token:
+        extractor_args = dict(cast(dict[str, Any], options.get("extractor_args") or {}))
+        yt_args = dict(cast(dict[str, Any], extractor_args.get("youtube") or {}))
+        yt_args["po_token"] = [settings.youtube_po_token]
+        extractor_args["youtube"] = yt_args
+        options["extractor_args"] = extractor_args
 
     if platform in COOKIE_PLATFORMS:
         target = platform_cookie_file(platform)

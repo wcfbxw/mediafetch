@@ -25,45 +25,74 @@ function FormatCard({
   const codec = format.has_video ? format.video_codec : format.audio_codec;
   const dimensions =
     format.width && format.height ? `${format.width} × ${format.height}` : null;
+  const isInstantStream = format.delivery_mode === "stream" && Boolean(format.stream_url);
+
   return (
     <button
       type="button"
       role="radio"
       aria-checked={selected}
       onClick={onClick}
-      className={`group relative min-h-[118px] overflow-hidden rounded-2xl border p-4 text-left ${
+      className={`group relative min-h-[122px] overflow-hidden rounded-2xl border p-4 text-left ${
         selected
           ? "border-cobalt-500 bg-cobalt-50 shadow-[0_12px_28px_rgba(91,95,239,.14)] ring-2 ring-cobalt-500/15 dark:bg-indigo-950/40"
           : "border-slate-200 bg-white/80 hover:-translate-y-0.5 hover:border-slate-400 hover:shadow-lg dark:border-slate-700 dark:bg-slate-900/80 dark:hover:border-slate-500"
       }`}
     >
-      {selected ? <span aria-hidden="true" className="absolute right-0 top-0 h-1 w-full bg-cobalt-500" /> : null}
+      {selected ? (
+        <span aria-hidden="true" className="absolute right-0 top-0 h-1 w-full bg-cobalt-500" />
+      ) : null}
       <span className="flex items-start justify-between gap-2">
         <span>
           <span className="block text-lg font-black tracking-tight text-slate-950 dark:text-white">
             {format.label}
           </span>
           {dimensions ? (
-            <span className="mt-0.5 block text-[11px] font-medium text-slate-400">{dimensions}</span>
+            <span className="mt-0.5 block text-[11px] font-medium text-slate-400">
+              {dimensions}
+            </span>
           ) : null}
         </span>
-        {format.preferred ? (
-          <span className="rounded-full bg-signal px-2 py-1 text-[10px] font-black text-slate-900">
-            推荐
-          </span>
-        ) : null}
+        <span className="flex flex-wrap justify-end gap-1">
+          {format.watermark_free !== false && format.has_video ? (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+              无水印
+            </span>
+          ) : null}
+          {format.preferred ? (
+            <span className="rounded-full bg-signal px-2 py-0.5 text-[10px] font-black text-slate-900">
+              推荐
+            </span>
+          ) : null}
+        </span>
       </span>
       <span className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] font-bold uppercase text-slate-500 dark:text-slate-400">
-        <span className="rounded-md bg-slate-100 px-1.5 py-1 dark:bg-slate-800">{format.extension}</span>
+        <span className="rounded-md bg-slate-100 px-1.5 py-1 dark:bg-slate-800">
+          {format.extension}
+        </span>
         <span className="max-w-[8rem] truncate rounded-md bg-slate-100 px-1.5 py-1 normal-case dark:bg-slate-800">
-          {codec || "未知编码"}
+          {codec || "原画编码"}
         </span>
         {format.fps ? <span>{Math.round(format.fps)} FPS</span> : null}
       </span>
-      <span className="mt-2 flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+      <span className="mt-2.5 flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
         <span>{formatBytes(format.estimated_size)}</span>
-        <span className={format.requires_merge ? "text-cobalt-600 dark:text-indigo-300" : ""}>
-          {format.requires_merge ? "含自动合并" : format.has_audio ? "音画一体" : "独立媒体轨"}
+        <span
+          className={
+            isInstantStream
+              ? "font-bold text-emerald-600 dark:text-emerald-300"
+              : format.requires_merge
+                ? "text-cobalt-600 dark:text-indigo-300"
+                : ""
+          }
+        >
+          {isInstantStream
+            ? "⚡ 极速直传"
+            : format.requires_merge
+              ? "自动无损合并"
+              : format.has_audio
+                ? "音画一体"
+                : "独立媒体轨"}
         </span>
       </span>
     </button>
@@ -91,13 +120,13 @@ export function FormatSelector({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-black uppercase tracking-[0.18em] text-cobalt-600 dark:text-indigo-300">
-            Step 02
+            Format & Stream
           </p>
           <h3 id="format-heading" className="mt-1 text-xl font-black tracking-tight">
-            选择清晰度
+            选择无水印清晰度或音轨
           </h3>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            已按画质、编码和容器推荐最佳方案，高画质会自动配对音频
+            已自动剔除带平台水印的流；单文件源流支持零等待极速直传，分离流自动 FFmpeg 合并
           </p>
         </div>
         <button
@@ -106,7 +135,9 @@ export function FormatSelector({
           aria-label={advanced ? "收起高级格式" : "显示高级格式"}
           className="min-h-11 self-start rounded-xl border border-slate-200 bg-white px-3.5 text-sm font-bold text-cobalt-600 hover:border-cobalt-300 hover:bg-cobalt-50 sm:self-auto dark:border-slate-700 dark:bg-slate-900 dark:text-indigo-300 dark:hover:bg-slate-800"
         >
-          {advanced ? "收起高级格式" : `显示高级格式${advancedCount > 0 ? ` · ${advancedCount}` : ""}`}
+          {advanced
+            ? "收起高级格式"
+            : `显示高级格式${advancedCount > 0 ? ` · ${advancedCount}` : ""}`}
         </button>
       </div>
       <div

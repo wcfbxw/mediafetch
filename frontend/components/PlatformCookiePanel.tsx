@@ -13,7 +13,12 @@ import type {
 
 const TOKEN_STORAGE_KEY = "mediafetch-admin-token";
 const PLATFORMS: Array<{ id: OperatorPlatform; name: string; hint: string }> = [
-  { id: "douyin", name: "抖音", hint: "新鲜的 douyin.com 会话" },
+  { id: "douyin", name: "抖音", hint: "douyin.com / iesdouyin.com 登录会话" },
+  { id: "tiktok", name: "TikTok", hint: "tiktok.com 登录会话" },
+  { id: "xiaohongshu", name: "小红书", hint: "xiaohongshu.com 网页版会话" },
+  { id: "kuaishou", name: "快手", hint: "kuaishou.com 登录会话" },
+  { id: "weibo", name: "微博", hint: "weibo.com / weibo.cn 登录会话" },
+  { id: "twitter", name: "X (Twitter)", hint: "x.com / twitter.com 登录会话" },
   { id: "instagram", name: "Instagram", hint: "instagram.com 登录会话" },
   { id: "youtube", name: "YouTube", hint: "youtube.com / google.com 登录会话" },
 ];
@@ -93,54 +98,63 @@ export function PlatformCookiePanel() {
 
   return (
     <section className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-panel sm:p-7 dark:border-slate-800 dark:bg-slate-900">
-      <p className="text-xs font-black uppercase tracking-[0.18em] text-cobalt-600 dark:text-indigo-300">Cookie sessions</p>
-      <h2 className="mt-2 text-xl font-black">其他平台会话</h2>
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-cobalt-600 dark:text-indigo-300">
+        Cookie sessions
+      </p>
+      <h2 className="mt-2 text-xl font-black">多平台受控 Cookie 会话</h2>
       <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
-        这些平台没有可安全接入的扫码接口。请从已登录浏览器导出当前平台的 Netscape cookies.txt；文件只允许包含对应平台域名，最大 128 KB。
+        从已登录浏览器导出对应站点的 Netscape 格式 cookies.txt（最大 128 KB）。后端按平台严格白名单校验域名，混合其他站点的文件会被自动拦截。
       </p>
 
-      <div className="mt-5 space-y-4">
+      <div className="mt-5 grid gap-3 sm:grid-cols-2">
         {PLATFORMS.map((platform) => {
           const status = statuses[platform.id];
           return (
-            <article key={platform.id} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-700 dark:bg-slate-950/40">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-bold">{platform.name}</h3>
-                    <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${status?.configured ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}>
-                      {status?.configured ? "已配置" : "未配置"}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    {status?.configured ? `更新：${dateText(status.updated_at)}` : platform.hint}
-                  </p>
+            <article
+              key={platform.id}
+              className="flex flex-col justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-700 dark:bg-slate-950/40"
+            >
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="font-bold">{platform.name}</h3>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                      status?.configured
+                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                        : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                    }`}
+                  >
+                    {status?.configured ? "已生效" : "未配置"}
+                  </span>
                 </div>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <label className="flex min-h-11 cursor-pointer items-center justify-center rounded-xl bg-slate-950 px-4 text-sm font-black text-white hover:bg-cobalt-600 dark:bg-signal dark:text-slate-950">
-                    {busy === platform.id ? "处理中…" : status?.configured ? "更新 Cookie" : "导入 Cookie"}
-                    <input
-                      type="file"
-                      accept=".txt,text/plain"
-                      disabled={Boolean(busy)}
-                      className="sr-only"
-                      onChange={(event) => {
-                        void upload(platform.id, event.currentTarget.files?.[0]);
-                        event.currentTarget.value = "";
-                      }}
-                    />
-                  </label>
-                  {status?.configured ? (
-                    <button
-                      type="button"
-                      disabled={Boolean(busy)}
-                      onClick={() => void clear(platform.id)}
-                      className="min-h-11 rounded-xl border border-red-300 px-4 text-sm font-bold text-red-700 disabled:opacity-50 dark:border-red-900 dark:text-red-300"
-                    >
-                      删除
-                    </button>
-                  ) : null}
-                </div>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {status?.configured ? `更新：${dateText(status.updated_at)}` : platform.hint}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="flex min-h-10 flex-1 cursor-pointer items-center justify-center rounded-xl bg-slate-950 px-3 text-xs font-black text-white hover:bg-cobalt-600 dark:bg-signal dark:text-slate-950">
+                  {busy === platform.id ? "处理中…" : status?.configured ? "更新 Cookie" : "导入 Cookie"}
+                  <input
+                    type="file"
+                    accept=".txt,text/plain"
+                    disabled={Boolean(busy)}
+                    className="sr-only"
+                    onChange={(event) => {
+                      void upload(platform.id, event.currentTarget.files?.[0]);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+                {status?.configured ? (
+                  <button
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => void clear(platform.id)}
+                    className="min-h-10 rounded-xl border border-red-300 px-3 text-xs font-bold text-red-700 disabled:opacity-50 dark:border-red-900 dark:text-red-300"
+                  >
+                    删除
+                  </button>
+                ) : null}
               </div>
             </article>
           );
@@ -148,10 +162,18 @@ export function PlatformCookiePanel() {
       </div>
 
       {busy === "refresh" ? <p className="mt-4 text-sm text-slate-500">正在读取会话状态…</p> : null}
-      {message ? <p aria-live="polite" className="mt-4 text-sm text-emerald-700 dark:text-emerald-300">{message}</p> : null}
-      {errorMessage ? <p role="alert" className="mt-4 text-sm text-red-600">{errorMessage}</p> : null}
+      {message ? (
+        <p aria-live="polite" className="mt-4 text-sm text-emerald-700 dark:text-emerald-300">
+          {message}
+        </p>
+      ) : null}
+      {errorMessage ? (
+        <p role="alert" className="mt-4 text-sm text-red-600">
+          {errorMessage}
+        </p>
+      ) : null}
       <p className="mt-5 border-t border-slate-100 pt-4 text-xs leading-5 text-slate-500 dark:border-slate-800 dark:text-slate-400">
-        Cookie 内容不会返回前端、不会写入日志，并在每次解析或下载时复制到进程私有临时文件。不要导出整个浏览器的 Cookie 数据库。
+        Cookie 内容不会返回前端、不会写入日志，并在每次解析或下载时复制到进程私有临时快照。
       </p>
     </section>
   );

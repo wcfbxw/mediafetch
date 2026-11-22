@@ -1,5 +1,6 @@
 import type {
   ApiError,
+  AuthConfig,
   BilibiliLoginPoll,
   BilibiliLoginStart,
   Inspection,
@@ -9,14 +10,43 @@ import type {
 } from "@/lib/types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api/v1";
+export const ACCESS_TOKEN_STORAGE_KEY = "mediafetch-access-token";
+
+function readAccessToken(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.sessionStorage.getItem(ACCESS_TOKEN_STORAGE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function resolveBackendUrl(pathOrUrl: string): string {
+  if (!pathOrUrl) return "";
+  if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+    return pathOrUrl;
+  }
+  if (API_BASE.startsWith("http://") || API_BASE.startsWith("https://")) {
+    try {
+      const parsed = new URL(API_BASE);
+      return `${parsed.origin}${pathOrUrl}`;
+    } catch {
+      return pathOrUrl;
+    }
+  }
+  return pathOrUrl;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const accessToken = readAccessToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(accessToken ? { "X-Access-Token": accessToken } : {}),
+    ...(init?.headers as Record<string, string> | undefined),
+  };
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
+    headers,
   });
   const body = (await response.json().catch(() => null)) as T | ApiError | null;
   if (!response.ok) {
@@ -27,6 +57,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
   }
   return body as T;
+}
+
+export function getAuthConfig(): Promise<AuthConfig> {
+  return request<AuthConfig>("/auth/config");
 }
 
 export function inspectUrl(url: string): Promise<Inspection> {
@@ -112,9 +146,10 @@ export async function uploadPlatformCookies(
   });
   const body = (await response.json().catch(() => null)) as PlatformSessionStatus | ApiError | null;
   if (!response.ok) {
-    const message = body && typeof body === "object" && "error" in body
-      ? body.error.message
-      : "Cookie 文件上传失败";
+    const message =
+      body && typeof body === "object" && "error" in body
+        ? body.error.message
+        : "Cookie 文件上传失败";
     throw new Error(message);
   }
   return body as PlatformSessionStatus;

@@ -1,5 +1,6 @@
 import json
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from yt_dlp.extractor.common import InfoExtractor
@@ -13,7 +14,21 @@ KUAISHOU_MOBILE_USER_AGENT = (
 
 def _find_photo(value: object) -> dict[str, Any] | None:
     if isinstance(value, dict):
-        if isinstance(value.get("manifest"), dict) and value.get("photoType") == "VIDEO":
+        if isinstance(value.get("manifest"), dict) and value.get("photoType") in {
+            "VIDEO",
+            "VERTICAL_ATLAS",
+            "HORIZONTAL_ATLAS",
+            "IMAGE_ATLAS",
+            None,
+        }:
+            return value
+        if isinstance(value.get("ext_params"), dict) and isinstance(
+            value["ext_params"].get("atlas"), dict
+        ):
+            return value
+        if isinstance(value.get("atlas"), dict) and isinstance(
+            value["atlas"].get("list"), list
+        ):
             return value
         for nested in value.values():
             found = _find_photo(nested)
@@ -49,6 +64,48 @@ def _codec_name(value: object) -> str:
     return codec
 
 
+def _extract_kuaishou_atlas(photo: Mapping[str, Any], webpage_url: str) -> list[dict[str, Any]]:
+    atlas = photo.get("atlas")
+    if not isinstance(atlas, Mapping):
+        ext_params = photo.get("ext_params")
+        if isinstance(ext_params, Mapping):
+            atlas = ext_params.get("atlas")
+    if not isinstance(atlas, Mapping):
+        return []
+    paths = atlas.get("list")
+    if not isinstance(paths, list) or not paths:
+        return []
+    cdn_list = atlas.get("cdn") or atlas.get("cdnList") or []
+    cdn_host = "tx2.a.kwimgs.com"
+    if isinstance(cdn_list, list) and cdn_list:
+        first_cdn = cdn_list[0]
+        if isinstance(first_cdn, str) and first_cdn:
+            cdn_host = first_cdn.strip("/")
+        elif isinstance(first_cdn, Mapping) and isinstance(first_cdn.get("cdn"), str):
+            cdn_host = first_cdn["cdn"].strip("/")
+    headers = {
+        "User-Agent": KUAISHOU_MOBILE_USER_AGENT,
+        "Referer": webpage_url,
+    }
+    gallery: list[dict[str, Any]] = []
+    for rel in paths:
+        if not isinstance(rel, str) or not rel:
+            continue
+        url = rel if rel.startswith(("http://", "https://")) else f"https://{cdn_host}/{rel.lstrip('/')}"
+        ext = "webp" if ".webp" in url.lower() else "jpg"
+        gallery.append(
+            {
+                "url": url,
+                "extension": ext,
+                "width": None,
+                "height": None,
+                "live_video_url": None,
+                "http_headers": headers,
+            }
+        )
+    return gallery
+
+
 def extract_kuaishou_state(state: dict[str, Any], webpage_url: str) -> dict[str, Any]:
     photo = _find_photo(state)
     if not photo:
@@ -56,6 +113,10 @@ def extract_kuaishou_state(state: dict[str, Any], webpage_url: str) -> dict[str,
 
     manifest = photo.get("manifest")
     formats: list[dict[str, Any]] = []
+    headers = {
+        "User-Agent": KUAISHOU_MOBILE_USER_AGENT,
+        "Referer": webpage_url,
+    }
     if isinstance(manifest, dict):
         for adaptation in manifest.get("adaptationSet") or []:
             if not isinstance(adaptation, dict):
@@ -85,15 +146,31 @@ def extract_kuaishou_state(state: dict[str, Any], webpage_url: str) -> dict[str,
                         "tbr": representation.get("avgBitrate"),
                         "filesize": representation.get("fileSize"),
                         "vcodec": codec,
-                        # Kuaishou's public MP4 representations are muxed and include AAC audio.
                         "acodec": "aac",
-                        "http_headers": {
-                            "User-Agent": KUAISHOU_MOBILE_USER_AGENT,
-                            "Referer": webpage_url,
-                        },
+                        "http_headers": headers,
                     }
                 )
     if not formats:
+        main_mv = _first_url(photo.get("mainMvUrls")) or photo.get("photoUrl")
+        if isinstance(main_mv, str) and main_mv.startswith(("http://", "https://")):
+            formats.append(
+                {
+                    "format_id": "ks-direct-h264",
+                    "format_note": "Kuaishou clean main stream",
+                    "url": main_mv,
+                    "ext": "mp4",
+                    "protocol": "https",
+                    "width": photo.get("width"),
+                    "height": photo.get("height"),
+                    "vcodec": "h264",
+                    "acodec": "aac",
+                    "watermark_free": True,
+                    "http_headers": headers,
+                }
+            )
+
+    gallery = _extract_kuaishou_atlas(photo, webpage_url)
+    if not formats and not gallery:
         raise ExtractorError("Kuaishou public video has no downloadable formats", expected=True)
 
     raw_duration = photo.get("duration")
@@ -107,28 +184,32 @@ def extract_kuaishou_state(state: dict[str, Any], webpage_url: str) -> dict[str,
     if not caption or caption == "...":
         caption = f"{uploader or 'Kuaishou'} - {photo_id}"
 
-    return {
+    result: dict[str, Any] = {
         "id": photo_id,
         "title": caption,
         "uploader": uploader or None,
         "duration": duration,
         "thumbnail": _first_url(photo.get("coverUrls"))
-        or _first_url(photo.get("webpCoverUrls")),
+        or _first_url(photo.get("webpCoverUrls"))
+        or (gallery[0]["url"] if gallery else None),
         "formats": formats,
         "webpage_url": webpage_url,
     }
+    if gallery:
+        result["_mediafetch_gallery"] = gallery
+    return result
 
 
 class MediaFetchKuaishouIE(InfoExtractor):
     IE_NAME = "mediafetch:kuaishou"
     _VALID_URL = (
         r"https?://(?:"
-        r"(?:(?:v|www)\.)?kuaishou\.com/(?:short-video/)?|"
-        r"v\.m\.chenzhongtech\.com/fw/photo/"
+        r"(?:(?:v|www|c)\.)?kuaishou\.com/(?:short-video/|f/|fw/photo/)?|"
+        r"(?:v\.)?m\.(?:chenzhongtech|gifshow)\.com/fw/photo/"
         r")(?P<id>[A-Za-z0-9_-]+)"
     )
     _INIT_STATE = re.compile(
-        r"window\.INIT_STATE\s*=\s*(?P<json>\{.+?\})\s*</script>",
+        r"window\.(?:INIT_STATE|__APOLLO_STATE__)\s*=\s*(?P<json>\{.+?\})\s*;?\s*</script>",
         re.DOTALL,
     )
 

@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from redis import Redis
 from rq import Queue
 
+from app.core.access import require_access_token
 from app.core.config import get_settings
 from app.core.errors import AppError, error
 from app.core.redis import get_async_redis, get_redis, get_rq_redis
@@ -139,6 +140,7 @@ async def create_download(
     payload: DownloadRequest,
     request: Request,
 ) -> CreateDownloadResponse:
+    require_access_token(request)
     settings = get_settings()
     client_ip = get_client_ip(request)
     await enforce_rate_limit(

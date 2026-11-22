@@ -167,8 +167,9 @@ def _download_track(
         "progress_hooks": [context.progress_hook(status, progress_start, progress_span, message)],
         "logger": QuietLogger(),
     }
-    if context.settings.ytdlp_proxy:
-        options["proxy"] = context.settings.ytdlp_proxy
+    proxy = context.settings.proxy_for_url(url)
+    if proxy:
+        options["proxy"] = proxy
     configure_ytdlp_credentials(options, url)
     if is_direct and isinstance(direct_media, dict):
         headers = direct_media.get("http_headers")

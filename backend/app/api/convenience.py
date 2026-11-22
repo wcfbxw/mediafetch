@@ -3,6 +3,7 @@ import asyncio
 from fastapi import APIRouter, Request
 
 from app.api.downloads import _create_download
+from app.core.access import require_access_token
 from app.core.config import get_settings
 from app.core.errors import error
 from app.core.redis import get_async_redis, get_redis
@@ -26,9 +27,14 @@ def _public_parse_response(inspection) -> ParseResponse:
         duration=inspection.duration,
         uploader=inspection.uploader,
         platform=inspection.platform,
+        engine=inspection.engine,
+        media_type=inspection.media_type,
+        watermark_free=inspection.watermark_free,
         parser_hook=inspection.parser_hook,
         formats=inspection.formats,
         audio_formats=inspection.audio_formats,
+        gallery=inspection.gallery,
+        gallery_zip_url=inspection.gallery_zip_url,
     )
 
 
@@ -38,14 +44,12 @@ def _select_quick_video(formats: list[MediaFormat]) -> MediaFormat:
         raise error("NO_FORMATS")
     preferred = [item for item in video_formats if item.preferred]
     candidates = preferred or video_formats
-    # The convenience endpoint targets short-form playback. Prefer the first
-    # normalized format up to 1080P to avoid unexpectedly queuing a multi-GB
-    # 1440P/2160P file; callers needing exact control use /inspect + /downloads.
     return next((item for item in candidates if (item.height or 0) <= 1080), candidates[0])
 
 
 @router.post("/parse", response_model=ParseResponse)
 async def parse_share_text(payload: ParseRequest, request: Request) -> ParseResponse:
+    require_access_token(request)
     settings = get_settings()
     await enforce_rate_limit(
         get_async_redis(),
@@ -69,6 +73,7 @@ async def quick_download(
     if payload.apply_ffmpeg_crop:
         raise error("WATERMARK_REMOVAL_NOT_SUPPORTED")
 
+    require_access_token(request)
     settings = get_settings()
     client_ip = get_client_ip(request)
     await enforce_rate_limit(

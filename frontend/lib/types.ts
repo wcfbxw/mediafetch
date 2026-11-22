@@ -1,3 +1,6 @@
+export type DeliveryMode = "stream" | "async_merge";
+export type MediaType = "video" | "gallery" | "audio";
+
 export type MediaFormat = {
   id: string;
   label: string;
@@ -13,6 +16,19 @@ export type MediaFormat = {
   has_audio: boolean;
   requires_merge: boolean;
   preferred: boolean;
+  watermark_free?: boolean;
+  delivery_mode?: DeliveryMode;
+  stream_url?: string | null;
+};
+
+export type GalleryItem = {
+  index: number;
+  extension: string;
+  width: number | null;
+  height: number | null;
+  preview_url: string;
+  download_url: string;
+  live_video_url: string | null;
 };
 
 export type Inspection = {
@@ -22,9 +38,14 @@ export type Inspection = {
   duration: number | null;
   uploader: string | null;
   platform: string;
+  engine?: string | null;
+  media_type?: MediaType;
+  watermark_free?: boolean;
   parser_hook: string | null;
   formats: MediaFormat[];
   audio_formats: MediaFormat[];
+  gallery?: GalleryItem[];
+  gallery_zip_url?: string | null;
 };
 
 export type JobStatus =
@@ -61,13 +82,25 @@ export type ApiError = {
   };
 };
 
+export type AuthConfig = {
+  access_token_required: boolean;
+};
+
 export type PlatformSessionStatus = {
   configured: boolean;
   updated_at: number | null;
   expires_at: number | null;
 };
 
-export type OperatorPlatform = "douyin" | "instagram" | "youtube";
+export type OperatorPlatform =
+  | "douyin"
+  | "tiktok"
+  | "xiaohongshu"
+  | "kuaishou"
+  | "weibo"
+  | "twitter"
+  | "instagram"
+  | "youtube";
 
 export type BilibiliLoginStart = {
   login_id: string;

@@ -1,5 +1,7 @@
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Mapping
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from app.core.errors import error
 
@@ -7,6 +9,22 @@ VALID_PROTOCOL_PREFIXES = ("http", "https", "m3u8", "dash")
 INVALID_EXTENSIONS = {"mhtml", "html", "jpg", "jpeg", "png", "webp", "gif"}
 H264_MARKERS = ("avc", "h264")
 AAC_MARKERS = ("aac", "mp4a")
+
+_CLEAN_WATERMARK_MARKERS = (
+    "no_watermark",
+    "nowatermark",
+    "no-watermark",
+    "no watermark",
+    "without watermark",
+    "unwatermarked",
+    "watermark_free",
+    "watermark-free",
+    "nwm",
+)
+_WATERMARK_TOKEN_RE = re.compile(
+    r"(?:^|[-_.\s/])(?:watermarked|watermark|playwm|download_addr|wm)(?:$|[-_.\s/0-9])",
+    re.IGNORECASE,
+)
 
 
 def _codec(value: object) -> str | None:
@@ -20,6 +38,47 @@ def _number(value: object, cast):
         return cast(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def clean_watermark_url(url: str) -> str:
+    """Rewrite official Douyin/TikTok playwm endpoints to clean play endpoints."""
+
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host.endswith(("iesdouyin.com", "douyin.com", "snssdk.com", "amemv.com")) and (
+        "/playwm/" in parsed.path
+    ):
+        return url.replace("/playwm/", "/play/", 1)
+    return url
+
+
+def is_watermarked_format(item: Mapping[str, Any]) -> bool:
+    """Return True when a format metadata record represents a platform-watermarked stream."""
+
+    if item.get("watermarked") is True or item.get("has_watermark") is True:
+        return True
+    if item.get("watermark_free") is True:
+        return False
+
+    format_id = str(item.get("format_id") or "").lower()
+    format_note = str(item.get("format_note") or "").lower()
+    combined_text = f"{format_id} {format_note}".strip()
+    scrubbed = combined_text
+    for clean_marker in _CLEAN_WATERMARK_MARKERS:
+        scrubbed = scrubbed.replace(clean_marker, " ")
+    if _WATERMARK_TOKEN_RE.search(scrubbed):
+        return True
+
+    url = str(item.get("url") or "")
+    if url:
+        parsed = urlsplit(url)
+        if "/playwm/" in parsed.path.lower():
+            return True
+        qs = parse_qs(parsed.query)
+        wm_values = qs.get("watermark") or qs.get("wm") or []
+        if any(val in {"1", "true", "yes"} for val in wm_values):
+            return True
+    return False
 
 
 def quality_label(width: int | None, height: int | None, has_video: bool) -> str:
@@ -44,18 +103,42 @@ def estimate_size(item: dict[str, Any], duration: int | None) -> int | None:
     return None
 
 
+def _can_direct_stream(
+    *,
+    url: str,
+    protocol: str,
+    ext: str,
+    has_video: bool,
+    has_audio: bool,
+) -> bool:
+    if has_video and not has_audio:
+        return False
+    if protocol not in {"", "http", "https"}:
+        return False
+    if ext in {"m3u8", "mpd", "ism"}:
+        return False
+    lowered_path = urlsplit(url).path.lower()
+    if lowered_path.endswith((".m3u8", ".mpd")):
+        return False
+    return True
+
+
 def normalize_format(item: dict[str, Any], duration: int | None) -> dict[str, Any] | None:
     format_id = str(item.get("format_id") or "").strip()
     ext = str(item.get("ext") or "").lower().strip()
     protocol = str(item.get("protocol") or "").lower()
-    url = item.get("url")
+    raw_url = item.get("url")
     format_note = str(item.get("format_note") or "").lower()
-    if not format_id or not url:
+    if not format_id or not isinstance(raw_url, str) or not raw_url:
         return None
     if item.get("has_drm") or "storyboard" in format_note or ext in INVALID_EXTENSIONS:
         return None
     if protocol and not protocol.startswith(VALID_PROTOCOL_PREFIXES):
         return None
+
+    url = clean_watermark_url(raw_url)
+    patched_item = item if url == raw_url else {**item, "url": url}
+    watermarked = is_watermarked_format(patched_item)
 
     vcodec = _codec(item.get("vcodec"))
     acodec = _codec(item.get("acodec"))
@@ -68,22 +151,47 @@ def normalize_format(item: dict[str, Any], duration: int | None) -> dict[str, An
 
     fps = _number(item.get("fps"), float)
     bitrate = _number(item.get("tbr") or item.get("vbr") or item.get("abr"), float)
+    requires_merge = has_video and not has_audio
+    streamable = _can_direct_stream(
+        url=url,
+        protocol=protocol,
+        ext=ext,
+        has_video=has_video,
+        has_audio=has_audio,
+    )
+    raw_headers = item.get("http_headers")
+    clean_headers = (
+        {
+            str(k): str(v)
+            for k, v in raw_headers.items()
+            if isinstance(k, str) and isinstance(v, str) and k.lower() != "cookie"
+        }
+        if isinstance(raw_headers, Mapping)
+        else {}
+    )
     return {
         "id": format_id,
         "label": quality_label(width, height, has_video),
         "width": width,
         "height": height,
         "fps": fps,
-        "extension": ext or "bin",
+        "extension": ext or "mp4",
         "video_codec": vcodec,
         "audio_codec": acodec,
         "bitrate": bitrate,
         "estimated_size": estimate_size(item, duration),
         "has_video": has_video,
         "has_audio": has_audio,
-        "requires_merge": has_video and not has_audio,
+        "requires_merge": requires_merge,
         "preferred": False,
+        "watermark_free": not watermarked,
+        "delivery_mode": "stream" if streamable else "async_merge",
+        "stream_url": None,
+        "_watermarked": watermarked,
         "_source_preference": _number(item.get("source_preference"), float) or 0,
+        "_stream_source": (
+            {"url": url, "http_headers": clean_headers} if streamable else None
+        ),
     }
 
 
@@ -129,6 +237,7 @@ def normalize_formats(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     seen: set[str] = set()
     video: list[dict[str, Any]] = []
+    watermarked_video: list[dict[str, Any]] = []
     audio: list[dict[str, Any]] = []
     for raw in raw_formats:
         normalized = normalize_format(raw, duration)
@@ -136,9 +245,16 @@ def normalize_formats(
             continue
         seen.add(normalized["id"])
         if normalized["has_video"]:
-            video.append(normalized)
+            if normalized.get("_watermarked"):
+                watermarked_video.append(normalized)
+            else:
+                video.append(normalized)
         else:
             audio.append(normalized)
+
+    if not video and watermarked_video and not audio:
+        raise error("WATERMARKED_ONLY")
+
     video.sort(key=_video_sort_key)
     audio.sort(key=_audio_sort_key)
 

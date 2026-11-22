@@ -8,7 +8,7 @@ SENSITIVE_PATTERN = re.compile(
     r"(?i)(cookie|authorization|token|signature|sig|key|password)=([^&\s]+)"
 )
 URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
-FILE_TOKEN_PATH = re.compile(r"(/api/v1/files/)[^/?\s]+")
+FILE_TOKEN_PATH = re.compile(r"(/api/v1/(?:files|stream|gallery)/)[^/?\s]+")
 
 
 def _redact_single_url(value: str) -> str:

@@ -140,22 +140,30 @@ class LinkResolver:
         return await self.resolve(extract_http_url(share_text))
 
     async def resolve(self, url: str) -> str:
+        from app.core.config import get_settings
+
         current = await validate_public_url(url)
-        transport = self.transport or SSRFSafeAsyncHTTPTransport()
+        settings = get_settings()
+        proxy = settings.proxy_for_url(current) if self.transport is None else None
+        transport = self.transport or (None if proxy else SSRFSafeAsyncHTTPTransport())
         timeout = httpx.Timeout(self.timeout_seconds)
         headers = {
             "User-Agent": MOBILE_USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
         }
+        client_kwargs: dict[str, object] = {
+            "timeout": timeout,
+            "follow_redirects": False,
+            "trust_env": False,
+            "headers": headers,
+        }
+        if proxy:
+            client_kwargs["proxy"] = proxy
+        elif transport is not None:
+            client_kwargs["transport"] = transport
         try:
-            async with httpx.AsyncClient(
-                transport=transport,
-                timeout=timeout,
-                follow_redirects=False,
-                trust_env=False,
-                headers=headers,
-            ) as client:
+            async with httpx.AsyncClient(**client_kwargs) as client:  # type: ignore[arg-type]
                 for redirect_count in range(self.max_redirects + 1):
                     status, location = await self._probe(client, current)
                     if status not in REDIRECT_STATUSES or not location:

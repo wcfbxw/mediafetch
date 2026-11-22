@@ -1,9 +1,54 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+DOMESTIC_PLATFORM_DOMAINS: tuple[str, ...] = (
+    "douyin.com",
+    "iesdouyin.com",
+    "douyinvod.com",
+    "byteimg.com",
+    "snssdk.com",
+    "xiaohongshu.com",
+    "xhslink.com",
+    "xhscdn.com",
+    "kuaishou.com",
+    "chenzhongtech.com",
+    "gifshow.com",
+    "yximgs.com",
+    "kwimgs.com",
+    "bilibili.com",
+    "b23.tv",
+    "bilivideo.com",
+    "bilivideo.cn",
+    "hdslb.com",
+    "weibo.com",
+    "weibo.cn",
+    "weibocdn.com",
+    "sinaimg.cn",
+    "ixigua.com",
+    "toutiao.com",
+    "pipixia.com",
+    "ppximg.com",
+    "acfun.cn",
+    "huya.com",
+    "douyu.com",
+    "zhihu.com",
+    "qq.com",
+)
+
+
+def is_domestic_url(url: str) -> bool:
+    hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
+    if not hostname:
+        return False
+    return any(
+        hostname == domain or hostname.endswith(f".{domain}")
+        for domain in DOMESTIC_PLATFORM_DOMAINS
+    )
 
 
 class Settings(BaseSettings):
@@ -26,6 +71,7 @@ class Settings(BaseSettings):
     )
     token_secret: str = Field(min_length=32)
     admin_token: str | None = None
+    access_token: str | None = None
     storage_root: Path = Path("./storage")
     credentials_root: Path = Path("./credentials")
 
@@ -48,6 +94,7 @@ class Settings(BaseSettings):
     ] = "veryfast"
     inspect_timeout_seconds: int = 45
     inspect_cache_ttl_seconds: int = 600
+    stream_token_ttl_seconds: int = 1800
     file_ttl_seconds: int = 7200
     job_ttl_seconds: int = 86_400
     cleanup_interval_seconds: int = 300
@@ -55,7 +102,18 @@ class Settings(BaseSettings):
     rate_limit_inspect_per_minute: int = 20
     rate_limit_download_per_minute: int = 10
     audio_mp3_quality: int = 2
+
+    # Outbound proxy routing: CN_PROXY_URL for domestic platforms,
+    # GLOBAL_PROXY_URL for international platforms, YTDLP_PROXY as fallback.
+    cn_proxy_url: str | None = None
+    global_proxy_url: str | None = None
     ytdlp_proxy: str | None = None
+
+    # Optional multi-engine & anti-bot capabilities.
+    douyin_api_base_url: str | None = None
+    ytdlp_impersonate: str | None = "chrome"
+    youtube_po_token: str | None = None
+
     parallel_download_enabled: bool = True
     parallel_download_connections: int = Field(default=8, ge=1, le=16)
     parallel_download_min_split_size_mb: int = Field(default=4, ge=1, le=64)
@@ -88,6 +146,27 @@ class Settings(BaseSettings):
         if len(value) < 32:
             raise ValueError("ADMIN_TOKEN must contain at least 32 characters")
         return value
+
+    @field_validator(
+        "access_token",
+        "cn_proxy_url",
+        "global_proxy_url",
+        "ytdlp_proxy",
+        "douyin_api_base_url",
+        "ytdlp_impersonate",
+        "youtube_po_token",
+    )
+    @classmethod
+    def normalize_optional_str(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    def proxy_for_url(self, url: str) -> str | None:
+        if is_domestic_url(url):
+            return self.cn_proxy_url or self.ytdlp_proxy
+        return self.global_proxy_url or self.ytdlp_proxy
 
     @property
     def max_file_size_bytes(self) -> int:

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request
 
+from app.core.access import require_access_token
 from app.core.config import get_settings
 from app.core.redis import get_async_redis, get_redis
 from app.core.security import enforce_rate_limit, get_client_ip
@@ -12,6 +13,7 @@ router = APIRouter(tags=["inspect"])
 
 @router.post("/inspect", response_model=InspectResponse)
 async def inspect_url(payload: InspectRequest, request: Request) -> InspectResponse:
+    require_access_token(request)
     settings = get_settings()
     await enforce_rate_limit(
         get_async_redis(),
@@ -19,6 +21,4 @@ async def inspect_url(payload: InspectRequest, request: Request) -> InspectRespo
         scope="inspect",
         limit=settings.rate_limit_inspect_per_minute,
     )
-    # Extraction is blocking and runs in its own thread; the sync Redis client
-    # is intentionally used only from that workflow.
     return await inspect_media(payload.url, get_redis())

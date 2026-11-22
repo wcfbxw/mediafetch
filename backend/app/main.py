@@ -8,7 +8,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 
-from app.api import admin, convenience, downloads, health, inspect, jobs, platform_sessions
+from app.api import (
+    admin,
+    convenience,
+    downloads,
+    health,
+    inspect,
+    jobs,
+    platform_sessions,
+    stream,
+)
+from app.core import access
 from app.core.config import get_settings
 from app.core.errors import AppError, error
 from app.core.logging import RequestIdAdapter, configure_logging, redact_path
@@ -28,7 +38,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="MediaFetch API",
-    version="1.2.0",
+    version="2.0.0",
     docs_url="/api/docs" if settings.app_env != "production" else None,
     redoc_url=None,
     default_response_class=ORJSONResponse,
@@ -39,8 +49,21 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Accept", "Content-Type", "X-Request-ID", "X-Admin-Token"],
-    expose_headers=["Content-Disposition", "X-Request-ID"],
+    allow_headers=[
+        "Accept",
+        "Content-Type",
+        "Range",
+        "X-Request-ID",
+        "X-Admin-Token",
+        "X-Access-Token",
+    ],
+    expose_headers=[
+        "Accept-Ranges",
+        "Content-Disposition",
+        "Content-Length",
+        "Content-Range",
+        "X-Request-ID",
+    ],
 )
 
 
@@ -117,9 +140,11 @@ async def validation_error_handler(
 
 for router in (
     health.router,
+    access.router,
     inspect.router,
     convenience.router,
     downloads.router,
+    stream.router,
     jobs.router,
     admin.router,
     platform_sessions.router,

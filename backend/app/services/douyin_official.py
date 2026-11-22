@@ -2,7 +2,9 @@ import json
 import re
 from collections.abc import Mapping
 from typing import Any
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
+
+from app.services.formats import clean_watermark_url
 
 OFFICIAL_DOUYIN_FORMAT_ID = "mediafetch-douyin-official-1080p"
 DOUYIN_MOBILE_USER_AGENT = (
@@ -10,7 +12,10 @@ DOUYIN_MOBILE_USER_AGENT = (
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
     "Mobile/15E148 Safari/604.1"
 )
-_VIDEO_ID_PATH = re.compile(r"/(?:video|share/video)/(\d+)(?:[/?#]|$)", re.IGNORECASE)
+_ITEM_ID_PATH = re.compile(
+    r"/(?:video|note|share/video|share/note|share/slides)/(\d+)(?:[/?#]|$)",
+    re.IGNORECASE,
+)
 _ROUTER_DATA_MARKER = re.compile(r"window\._ROUTER_DATA\s*=", re.IGNORECASE)
 
 
@@ -22,7 +27,7 @@ def is_official_share_url(source_url: str) -> bool:
     parsed = urlsplit(source_url)
     hostname = (parsed.hostname or "").lower().rstrip(".")
     return hostname in {"iesdouyin.com", "www.iesdouyin.com"} and bool(
-        _VIDEO_ID_PATH.search(parsed.path)
+        _ITEM_ID_PATH.search(parsed.path)
     )
 
 
@@ -30,9 +35,13 @@ def _video_id(source_url: str, info: Mapping[str, Any]) -> str:
     for candidate_url in (source_url, info.get("webpage_url")):
         if not isinstance(candidate_url, str):
             continue
-        match = _VIDEO_ID_PATH.search(urlsplit(candidate_url).path)
+        parsed = urlsplit(candidate_url)
+        match = _ITEM_ID_PATH.search(parsed.path)
         if match:
             return match.group(1)
+        modal_ids = parse_qs(parsed.query).get("modal_id") or []
+        if modal_ids and modal_ids[0].isdigit():
+            return modal_ids[0]
     for key in ("id", "aweme_id"):
         candidate = str(info.get(key) or "")
         if candidate.isdigit() and len(candidate) <= 32:
@@ -83,7 +92,7 @@ def parse_router_data(page: str) -> dict[str, Any]:
     return value
 
 
-def _playback_detail(router_data: Mapping[str, Any], expected_id: str) -> Mapping[str, Any]:
+def _item_detail(router_data: Mapping[str, Any], expected_id: str) -> Mapping[str, Any]:
     stack: list[tuple[Any, int]] = [(router_data, 0)]
     fallback: Mapping[str, Any] | None = None
     visited = 0
@@ -93,16 +102,20 @@ def _playback_detail(router_data: Mapping[str, Any], expected_id: str) -> Mappin
         if visited > 50_000 or depth > 64:
             continue
         if isinstance(value, Mapping):
+            has_images = isinstance(value.get("images"), list) and len(value["images"]) > 0
             video = value.get("video")
-            if isinstance(video, Mapping):
-                play_addr = video.get("play_addr")
-                if isinstance(play_addr, Mapping) and play_addr.get("uri"):
-                    identity = str(
-                        value.get("aweme_id") or value.get("item_id") or value.get("id") or ""
-                    )
-                    if identity == expected_id:
-                        return value
-                    fallback = fallback or value
+            has_play_uri = (
+                isinstance(video, Mapping)
+                and isinstance(video.get("play_addr"), Mapping)
+                and bool(video["play_addr"].get("uri"))
+            )
+            if has_play_uri or has_images:
+                identity = str(
+                    value.get("aweme_id") or value.get("item_id") or value.get("id") or ""
+                )
+                if identity == expected_id:
+                    return value
+                fallback = fallback or value
             stack.extend((child, depth + 1) for child in value.values())
         elif isinstance(value, list):
             stack.extend((child, depth + 1) for child in value)
@@ -119,17 +132,144 @@ def _positive_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _first_public_url(value: Any, *, clean_only: bool = False) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    urls = value.get("url_list")
+    if not isinstance(urls, list):
+        return None
+    candidates = [
+        clean_watermark_url(url)
+        for url in urls
+        if isinstance(url, str) and url.startswith("https://")
+    ]
+    if clean_only:
+        non_wm = [url for url in candidates if "watermark" not in url.lower()]
+        if non_wm:
+            return non_wm[0]
+    return candidates[0] if candidates else None
+
+
+def _image_ext_from_url(url: str) -> str:
+    path = urlsplit(url).path.lower()
+    for ext in ("png", "webp", "jpeg", "jpg"):
+        if path.endswith(f".{ext}"):
+            return "jpg" if ext == "jpeg" else ext
+    return "jpg"
+
+
+def _extract_douyin_gallery(detail: Mapping[str, Any]) -> list[dict[str, Any]]:
+    images = detail.get("images")
+    if not isinstance(images, list) or not images:
+        return []
+    headers = {
+        "Referer": "https://www.douyin.com/",
+        "User-Agent": DOUYIN_MOBILE_USER_AGENT,
+    }
+    gallery: list[dict[str, Any]] = []
+    for item in images:
+        if not isinstance(item, Mapping):
+            continue
+        image_url = _first_public_url(item, clean_only=True)
+        if not image_url:
+            continue
+        live_video_url: str | None = None
+        clip_video = item.get("video")
+        if isinstance(clip_video, Mapping):
+            play_addr = clip_video.get("play_addr")
+            if isinstance(play_addr, Mapping):
+                uri = str(play_addr.get("uri") or "").strip()
+                if uri and len(uri) <= 512 and not any(ord(c) < 32 for c in uri):
+                    live_video_url = "https://www.iesdouyin.com/aweme/v1/play/?" + urlencode(
+                        {"video_id": uri, "ratio": "1080p", "line": "0"}
+                    )
+                else:
+                    live_video_url = _first_public_url(play_addr, clean_only=True)
+        gallery.append(
+            {
+                "url": image_url,
+                "extension": _image_ext_from_url(image_url),
+                "width": _positive_int(item.get("width")),
+                "height": _positive_int(item.get("height")),
+                "live_video_url": live_video_url,
+                "http_headers": headers,
+            }
+        )
+    return gallery
+
+
+def _extract_bitrate_formats(
+    video: Mapping[str, Any],
+    duration_s: float | None,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    bit_rates = video.get("bit_rate")
+    if not isinstance(bit_rates, list):
+        return [], {}
+    headers = {
+        "Referer": "https://www.douyin.com/",
+        "User-Agent": DOUYIN_MOBILE_USER_AGENT,
+    }
+    formats: list[dict[str, Any]] = []
+    direct_map: dict[str, dict[str, Any]] = {}
+    for index, entry in enumerate(bit_rates):
+        if not isinstance(entry, Mapping):
+            continue
+        play_addr = entry.get("play_addr")
+        url = _first_public_url(play_addr, clean_only=True)
+        if not url:
+            continue
+        gear_name = str(entry.get("gear_name") or f"gear-{index}").strip()[:48]
+        is_bytevc1 = str(entry.get("is_bytevc1") or entry.get("is_h265") or "0") in {"1", "true"}
+        codec = "hevc" if is_bytevc1 else "h264"
+        fmt_id = f"douyin-clean-{gear_name}-{codec}-{index}"
+        addr_map = play_addr if isinstance(play_addr, Mapping) else {}
+        width = _positive_int(addr_map.get("width")) or _positive_int(video.get("width"))
+        height = _positive_int(addr_map.get("height")) or _positive_int(video.get("height"))
+        size = _positive_int(addr_map.get("data_size"))
+        bps = _positive_int(entry.get("bit_rate"))
+        fps = _positive_int(entry.get("FPS"))
+        raw: dict[str, Any] = {
+            "format_id": fmt_id,
+            "format_note": f"Douyin clean {gear_name}",
+            "url": url,
+            "protocol": "https",
+            "ext": "mp4",
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "tbr": round(bps / 1000, 1) if bps else None,
+            "filesize": size,
+            "vcodec": codec,
+            "acodec": "aac",
+            "watermark_free": True,
+            "source_preference": 200 - index,
+            "http_headers": headers,
+        }
+        if duration_s:
+            raw["duration"] = duration_s
+        formats.append(raw)
+        direct_map[fmt_id] = {"url": url, "http_headers": headers}
+    return formats, direct_map
+
+
 def build_official_playback(
     source_url: str,
     info: Mapping[str, Any],
     share_page: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     video_id = _video_id(source_url, info)
-    detail = _playback_detail(parse_router_data(share_page), video_id)
-    video = detail["video"]
+    detail = _item_detail(parse_router_data(share_page), video_id)
+    video = detail.get("video")
+    if not isinstance(video, Mapping) or not isinstance(video.get("play_addr"), Mapping):
+        raise DouyinOfficialPlaybackUnavailable("missing official playback uri")
     play_addr = video["play_addr"]
     playback_uri = str(play_addr.get("uri") or "").strip()
-    if not playback_uri or len(playback_uri) > 512 or any(ord(char) < 32 for char in playback_uri):
+    if (
+        not playback_uri
+        or playback_uri.startswith(("http://", "https://"))
+        or len(playback_uri) > 512
+        or any(ord(char) < 32 for char in playback_uri)
+    ):
         raise DouyinOfficialPlaybackUnavailable("invalid official playback uri")
 
     playback_url = "https://www.iesdouyin.com/aweme/v1/play/?" + urlencode(
@@ -138,6 +278,10 @@ def build_official_playback(
     width = _positive_int(video.get("width"))
     height = _positive_int(video.get("height"))
     duration_ms = _positive_int(video.get("duration"))
+    headers = {
+        "Referer": "https://www.douyin.com/",
+        "User-Agent": DOUYIN_MOBILE_USER_AGENT,
+    }
     raw_format: dict[str, Any] = {
         "format_id": OFFICIAL_DOUYIN_FORMAT_ID,
         "format_note": "Douyin official playback",
@@ -148,27 +292,17 @@ def build_official_playback(
         "height": height,
         "vcodec": "h264",
         "acodec": "aac",
-        "source_preference": 100,
+        "watermark_free": True,
+        "source_preference": 150,
+        "http_headers": headers,
     }
     if duration_ms and duration_ms >= 1000:
         raw_format["duration"] = duration_ms / 1000
     internal_source = {
         "url": playback_url,
-        "http_headers": {
-            "Referer": "https://www.douyin.com/",
-            "User-Agent": DOUYIN_MOBILE_USER_AGENT,
-        },
+        "http_headers": headers,
     }
     return raw_format, internal_source
-
-
-def _first_public_url(value: Any) -> str | None:
-    if not isinstance(value, Mapping):
-        return None
-    urls = value.get("url_list")
-    if not isinstance(urls, list):
-        return None
-    return next((url for url in urls if isinstance(url, str) and url.startswith("https://")), None)
 
 
 def _fetch_share_page(ydl: Any, video_id: str) -> str:
@@ -181,40 +315,95 @@ def _fetch_share_page(ydl: Any, video_id: str) -> str:
 
 
 def extract_official_douyin_info(ydl: Any, source_url: str) -> dict[str, Any]:
-    """Build a complete fallback result from Douyin's official share-page data."""
+    """Build a complete clean result from Douyin's official share-page data."""
 
     video_id = _video_id(source_url, {})
     share_page = _fetch_share_page(ydl, video_id)
     router_data = parse_router_data(share_page)
-    detail = _playback_detail(router_data, video_id)
-    raw_format, internal_source = build_official_playback(source_url, {}, share_page)
+    detail = _item_detail(router_data, video_id)
+    gallery = _extract_douyin_gallery(detail)
+
     video_value = detail.get("video")
     author_value = detail.get("author")
     video: Mapping[str, Any] = video_value if isinstance(video_value, Mapping) else {}
     author: Mapping[str, Any] = author_value if isinstance(author_value, Mapping) else {}
     duration_ms = _positive_int(video.get("duration"))
-    title = str(detail.get("desc") or "Douyin video").strip()[:300] or "Douyin video"
+    duration_s = duration_ms / 1000 if duration_ms else None
+
+    formats: list[dict[str, Any]] = []
+    direct_formats: dict[str, dict[str, Any]] = {}
+    try:
+        raw_format, internal_source = build_official_playback(source_url, {}, share_page)
+        formats.append(raw_format)
+        direct_formats[OFFICIAL_DOUYIN_FORMAT_ID] = internal_source
+    except DouyinOfficialPlaybackUnavailable:
+        if not gallery:
+            raise
+
+    extra_formats, extra_direct = _extract_bitrate_formats(video, duration_s)
+    formats.extend(extra_formats)
+    direct_formats.update(extra_direct)
+
+    # Extract background music audio for image notes if available.
+    if gallery:
+        music_url = _first_public_url(video.get("play_addr"), clean_only=True)
+        if music_url and music_url.startswith("https://") and not formats:
+            formats.append(
+                {
+                    "format_id": "douyin-bgm-audio",
+                    "format_note": "Douyin note BGM",
+                    "url": music_url,
+                    "protocol": "https",
+                    "ext": "m4a",
+                    "vcodec": "none",
+                    "acodec": "mp3",
+                    "watermark_free": True,
+                    "http_headers": {
+                        "Referer": "https://www.douyin.com/",
+                        "User-Agent": DOUYIN_MOBILE_USER_AGENT,
+                    },
+                }
+            )
+
+    title = str(detail.get("desc") or "Douyin media").strip()[:300] or "Douyin media"
+    cover = _first_public_url(video.get("cover")) or (
+        gallery[0]["url"] if gallery else None
+    )
     return {
         "id": video_id,
         "title": title,
         "description": title,
         "uploader": str(author.get("nickname") or "").strip()[:200] or None,
-        "duration": duration_ms / 1000 if duration_ms else None,
-        "thumbnail": _first_public_url(video.get("cover")),
+        "duration": duration_s if not gallery else None,
+        "thumbnail": cover,
         "webpage_url": f"https://www.iesdouyin.com/share/video/{video_id}",
         "extractor": "mediafetch:douyin:official",
         "extractor_key": "MediaFetchDouyinOfficial",
-        "formats": [raw_format],
-        "_mediafetch_direct_formats": {OFFICIAL_DOUYIN_FORMAT_ID: internal_source},
+        "formats": formats,
+        "_mediafetch_direct_formats": direct_formats,
+        "_mediafetch_gallery": gallery,
+        "_mediafetch_engine": "douyin-clean",
     }
 
 
 def add_official_playback_format(ydl: Any, source_url: str, info: dict[str, Any]) -> bool:
-    """Append one server-generated official playback candidate to a yt-dlp result."""
+    """Append clean official playback candidates and gallery items to a yt-dlp result."""
 
     video_id = _video_id(source_url, info)
     page = _fetch_share_page(ydl, video_id)
+    router_data = parse_router_data(page)
+    detail = _item_detail(router_data, video_id)
+    gallery = _extract_douyin_gallery(detail)
+    if gallery:
+        info["_mediafetch_gallery"] = gallery
+
     raw_format, internal_source = build_official_playback(source_url, info, page)
+    video_value = detail.get("video")
+    video: Mapping[str, Any] = video_value if isinstance(video_value, Mapping) else {}
+    duration_ms = _positive_int(video.get("duration"))
+    extra_formats, extra_direct = _extract_bitrate_formats(
+        video, duration_ms / 1000 if duration_ms else None
+    )
 
     formats = info.setdefault("formats", [])
     if not isinstance(formats, list):
@@ -226,5 +415,8 @@ def add_official_playback_format(ydl: Any, source_url: str, info: dict[str, Any]
         or item.get("format_id") != OFFICIAL_DOUYIN_FORMAT_ID
     ]
     formats.append(raw_format)
-    info.setdefault("_mediafetch_direct_formats", {})[OFFICIAL_DOUYIN_FORMAT_ID] = internal_source
+    formats.extend(extra_formats)
+    direct_store = info.setdefault("_mediafetch_direct_formats", {})
+    direct_store[OFFICIAL_DOUYIN_FORMAT_ID] = internal_source
+    direct_store.update(extra_direct)
     return True

@@ -2,6 +2,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+DeliveryMode = Literal["stream", "async_merge"]
+MediaType = Literal["video", "gallery", "audio"]
+
 
 class MediaFormat(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -20,6 +23,21 @@ class MediaFormat(BaseModel):
     has_audio: bool
     requires_merge: bool
     preferred: bool = False
+    watermark_free: bool = True
+    delivery_mode: DeliveryMode = "async_merge"
+    stream_url: str | None = None
+
+
+class GalleryItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    index: int
+    extension: str = "jpg"
+    width: int | None = None
+    height: int | None = None
+    preview_url: str
+    download_url: str
+    live_video_url: str | None = None
 
 
 class InspectResponse(BaseModel):
@@ -29,9 +47,14 @@ class InspectResponse(BaseModel):
     duration: int | None = None
     uploader: str | None = None
     platform: str
+    engine: str | None = None
+    media_type: MediaType = "video"
+    watermark_free: bool = True
     parser_hook: str | None = None
     formats: list[MediaFormat]
     audio_formats: list[MediaFormat]
+    gallery: list[GalleryItem] = Field(default_factory=list)
+    gallery_zip_url: str | None = None
 
 
 class ParseResponse(BaseModel):
@@ -42,9 +65,14 @@ class ParseResponse(BaseModel):
     duration: int | None = None
     uploader: str | None = None
     platform: str
+    engine: str | None = None
+    media_type: MediaType = "video"
+    watermark_free: bool = True
     parser_hook: str | None = None
     formats: list[MediaFormat]
     audio_formats: list[MediaFormat]
+    gallery: list[GalleryItem] = Field(default_factory=list)
+    gallery_zip_url: str | None = None
 
 
 JobStatus = Literal[
@@ -72,6 +100,10 @@ class QuickDownloadResponse(BaseModel):
     message: Literal["queued"] = "queued"
     job_id: str
     status: Literal["queued"]
+
+
+class AuthRequirementResponse(BaseModel):
+    access_token_required: bool = False
 
 
 class JobResponse(BaseModel):

@@ -37,6 +37,16 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # Optional dedicated Douyin/TikTok hybrid engine (`docker compose --profile hybrid up -d`)
+  # When enabled, set DOUYIN_API_BASE_URL=http://douyin-api:80 in .env.
+  # Built-in clean extractors work out-of-the-box even without this container.
+  douyin-api:
+    image: evil0ctal/douyin_tiktok_download_api:latest
+    profiles: ["hybrid"]
+    expose:
+      - "80"
+    restart: unless-stopped
+
   api:
     <<: *backend-common
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=172.16.0.0/12", "--no-access-log"]

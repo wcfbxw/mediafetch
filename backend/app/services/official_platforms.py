@@ -3,12 +3,20 @@ from typing import Any
 
 SUPPORTED_PLATFORM_EXTRACTORS: dict[str, tuple[str, ...]] = {
     "douyin": ("Douyin", "MediaFetchDouyinOfficial"),
+    "tiktok": ("TikTok",),
     "kuaishou": ("MediaFetchKuaishou",),
     "xiaohongshu": ("XiaoHongShu",),
     "bilibili": ("BiliBili",),
     "weibo": ("Weibo", "WeiboVideo"),
     "xigua": ("Ixigua",),
+    "pipixia": ("MediaFetchPipixia",),
     "youtube": ("Youtube",),
+    "twitter": ("Twitter",),
+    "instagram": ("Instagram",),
+    "facebook": ("Facebook",),
+    "reddit": ("Reddit",),
+    "vimeo": ("Vimeo",),
+    "twitch": ("TwitchVod",),
 }
 
 
@@ -71,4 +79,5 @@ def prefer_official_original_formats(info: dict[str, Any]) -> None:
         if not original.get(field) and reference.get(field) is not None:
             original[field] = reference[field]
     original["format_note"] = "Xiaohongshu official original"
+    original["watermark_free"] = True
     original["source_preference"] = 1000

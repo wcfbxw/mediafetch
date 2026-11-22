@@ -35,6 +35,11 @@ ERROR_MESSAGES: dict[str, tuple[str, int]] = {
         "不提供删除、裁切或遮挡平台水印的功能",
         422,
     ),
+    "WATERMARKED_ONLY": (
+        "该链接仅返回带平台水印的视频流，已自动拦截；请检查链接或更新平台会话",
+        422,
+    ),
+    "ACCESS_UNAUTHORIZED": ("访问口令无效或缺失，请输入正确的访问口令", 401),
     "JOB_NOT_FOUND": ("任务不存在", 404),
     "JOB_EXPIRED": ("任务已过期", 410),
     "ADMIN_UNAUTHORIZED": ("管理员凭证无效", 401),
